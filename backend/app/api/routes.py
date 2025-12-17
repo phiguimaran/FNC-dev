@@ -1,7 +1,7 @@
 import hashlib
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import Session, select
 
 from ..db import get_session
@@ -17,7 +17,7 @@ from ..models import (
     StockMovement,
     User,
 )
-from ..models.common import MovementType, OrderStatus, SKUTag, UnitOfMeasure
+from ..models.common import MovementType, OrderStatus, SKUTag, SKUFamily, UnitOfMeasure
 from ..schemas import (
     DepositCreate,
     DepositRead,
@@ -65,6 +65,32 @@ def _map_user(user: User, session: Session) -> UserRead:
     )
 
 
+def _ensure_store_destination(session: Session, destination_id: int) -> Deposit:
+    deposit = session.get(Deposit, destination_id)
+    if not deposit:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Destino no encontrado")
+    if not deposit.is_store:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El destino debe ser un local definido")
+    return deposit
+
+
+def _validate_order_items(session: Session, items: list[dict]) -> None:
+    sku_ids = {item["sku_id"] for item in items}
+    skus = session.exec(select(SKU).where(SKU.id.in_(sku_ids))).all()
+    if len(skus) != len(sku_ids):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Algún SKU no existe")
+
+    sku_map = {sku.id: sku for sku in skus}
+    for item in items:
+        sku = sku_map.get(item["sku_id"])
+        if not sku:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SKU no encontrado")
+        if sku.tag in {SKUTag.MP, SKUTag.SEMI}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se permiten MP o SEMI en pedidos")
+        if not sku.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Algún SKU está inactivo")
+
+
 def _map_order(order: Order, session: Session) -> OrderRead:
     session.refresh(order, attribute_names=["items"])
     items = []
@@ -86,6 +112,7 @@ def _map_order(order: Order, session: Session) -> OrderRead:
     return OrderRead(
         id=order.id,
         destination=order.destination,
+        destination_deposit_id=order.destination_deposit_id,
         requested_for=order.requested_for,
         status=order.status,
         notes=order.notes,
@@ -191,9 +218,26 @@ def list_units() -> list[UnitRead]:
 
 
 @router.get("/skus", tags=["sku"], response_model=list[SKURead])
-def list_skus(session: Session = Depends(get_session)) -> list[SKU]:
+def list_skus(
+    tags: list[SKUTag] | None = Query(None),
+    families: list[SKUFamily] | None = Query(None),
+    include_inactive: bool = False,
+    search: str | None = None,
+    session: Session = Depends(get_session),
+) -> list[SKU]:
     """Listado simple para bootstrap de catálogo."""
-    return session.exec(select(SKU).order_by(SKU.name, SKU.code)).all()
+    statement = select(SKU)
+    if tags:
+        statement = statement.where(SKU.tag.in_(tags))
+    if families:
+        statement = statement.where(SKU.family.in_(families))
+    if not include_inactive:
+        statement = statement.where(SKU.is_active.is_(True))
+    if search:
+        like = f"%{search.lower()}%"
+        statement = statement.where((SKU.name.ilike(like)) | (SKU.code.ilike(like)))
+    statement = statement.order_by(SKU.name, SKU.code)
+    return session.exec(statement).all()
 
 
 @router.get("/skus/{sku_id}", tags=["sku"], response_model=SKURead)
@@ -212,8 +256,11 @@ def create_sku(payload: SKUCreate, session: Session = Depends(get_session)) -> S
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="El código ya existe",
         )
+    data = payload.model_dump()
+    if data.get("tag") != SKUTag.CON:
+        data["family"] = None
 
-    sku = SKU(**payload.model_dump())
+    sku = SKU(**data)
     session.add(sku)
     session.commit()
     session.refresh(sku)
@@ -227,6 +274,8 @@ def update_sku(sku_id: int, payload: SKUUpdate, session: Session = Depends(get_s
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SKU no encontrado")
 
     update_data = payload.model_dump(exclude_unset=True)
+    if "tag" in update_data and update_data["tag"] != SKUTag.CON:
+        update_data["family"] = None
     for field, value in update_data.items():
         setattr(sku, field, value)
     session.add(sku)
@@ -430,16 +479,16 @@ def get_order(order_id: int, session: Session = Depends(get_session)) -> OrderRe
 def create_order(payload: OrderCreate, session: Session = Depends(get_session)) -> OrderRead:
     if not payload.items:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El pedido debe tener al menos un ítem")
+    destination = _ensure_store_destination(session, payload.destination_deposit_id)
 
-    sku_ids = {item.sku_id for item in payload.items}
-    existing_skus = session.exec(select(SKU.id).where(SKU.id.in_(sku_ids))).all()
-    if len(existing_skus) != len(sku_ids):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Algún SKU no existe")
+    items_payload = [item.model_dump() for item in payload.items]
+    _validate_order_items(session, items_payload)
 
     order = Order(
-        destination=payload.destination,
+        destination=destination.name,
+        destination_deposit_id=destination.id,
         requested_for=payload.requested_for,
-        status=payload.status or OrderStatus.SUBMITTED,
+        status=OrderStatus.SUBMITTED,
         notes=payload.notes,
     )
     session.add(order)
@@ -469,16 +518,22 @@ def update_order(order_id: int, payload: OrderUpdate, session: Session = Depends
     if payload.items is not None and not payload.items:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El pedido debe tener al menos un ítem")
 
+    destination = None
+    if payload.destination_deposit_id is not None:
+        destination = _ensure_store_destination(session, payload.destination_deposit_id)
+
     if payload.items is not None:
-        sku_ids = {item.sku_id for item in payload.items}
-        existing_skus = session.exec(select(SKU.id).where(SKU.id.in_(sku_ids))).all()
-        if len(existing_skus) != len(sku_ids):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Algún SKU no existe")
+        items_payload = [item.model_dump() for item in payload.items]
+        _validate_order_items(session, items_payload)
 
     update_data = payload.model_dump(exclude_unset=True)
     items = update_data.pop("items", None)
+    update_data.pop("destination_deposit_id", None)
     for field, value in update_data.items():
         setattr(order, field, value)
+    if destination:
+        order.destination = destination.name
+        order.destination_deposit_id = destination.id
     order.updated_at = datetime.utcnow()
     session.add(order)
     session.flush()

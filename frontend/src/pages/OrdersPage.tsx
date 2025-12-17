@@ -1,6 +1,7 @@
 import LocalShippingIcon from "@mui/icons-material/LocalShipping";
 import PlaylistAddIcon from "@mui/icons-material/PlaylistAdd";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutline";
 import {
   Alert,
   Box,
@@ -22,11 +23,13 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   createOrder,
   deleteOrder,
+  fetchDeposits,
   fetchOrders,
   fetchSkus,
   Order,
   OrderItem,
   OrderStatus,
+  Deposit,
   SKU,
   updateOrder,
   updateOrderStatus,
@@ -40,85 +43,118 @@ const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   closed: "Cerrado",
 };
 
-type OrderFormItem = { sku_id: string; quantity: string; current_stock: string };
+type OrderLine = { sku_id: string; quantity: string; current_stock: string };
+type SectionKey = "pt" | "consumibles" | "papeleria" | "limpieza";
+
+type SectionConfig = {
+  key: SectionKey;
+  title: string;
+  filter: (sku: SKU) => boolean;
+};
+
+const initialLine: OrderLine = { sku_id: "", quantity: "", current_stock: "" };
 
 export function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [skus, setSkus] = useState<SKU[]>([]);
+  const [deposits, setDeposits] = useState<Deposit[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [orderForm, setOrderForm] = useState<{ destination: string; notes: string; status: OrderStatus; items: OrderFormItem[] }>(
-    {
-      destination: "",
-      notes: "",
-      status: "submitted",
-      items: [
-        {
-          sku_id: "",
-          quantity: "",
-          current_stock: "",
-        },
-      ],
-    }
-  );
+  const [header, setHeader] = useState<{ destination_deposit_id: string; notes: string }>({ destination_deposit_id: "", notes: "" });
+  const [lines, setLines] = useState<Record<SectionKey, OrderLine[]>>({
+    pt: [initialLine],
+    consumibles: [initialLine],
+    papeleria: [initialLine],
+    limpieza: [initialLine],
+  });
 
   useEffect(() => {
     void loadData();
   }, []);
 
   const sortedSkus = useMemo(() => [...skus].sort((a, b) => a.name.localeCompare(b.name)), [skus]);
+  const storeDeposits = useMemo(() => deposits.filter((d) => d.is_store), [deposits]);
+
+  const sections: SectionConfig[] = [
+    { key: "pt", title: "Productos terminados", filter: (sku) => sku.tag === "PT" },
+    { key: "consumibles", title: "Consumibles (depósito)", filter: (sku) => sku.tag === "CON" && sku.family === "consumible" },
+    { key: "papeleria", title: "Papelería", filter: (sku) => sku.tag === "CON" && sku.family === "papeleria" },
+    { key: "limpieza", title: "Limpieza", filter: (sku) => sku.tag === "CON" && sku.family === "limpieza" },
+  ];
 
   const loadData = async () => {
     try {
-      const [orderList, skuList] = await Promise.all([fetchOrders(), fetchSkus()]);
+      const [orderList, skuList, depositList] = await Promise.all([fetchOrders(), fetchSkus({ include_inactive: true }), fetchDeposits()]);
       setOrders(orderList);
       setSkus(skuList);
+      setDeposits(depositList);
       setError(null);
     } catch (err) {
       console.error(err);
-      setError("No pudimos obtener pedidos o productos");
+      setError("No pudimos obtener pedidos, productos o locales");
     }
   };
 
   const skuLabel = (id: number) => {
     const sku = skus.find((s) => s.id === id);
-    return sku ? `${sku.name} (${sku.code})` : `SKU ${id}`;
+    if (!sku) return `SKU ${id}`;
+    return `${sku.name} (${sku.code})${!sku.is_active ? " (inactivo)" : ""}`;
   };
 
-  const handleItemChange = (index: number, field: keyof OrderFormItem, value: string) => {
-    setOrderForm((prev) => {
-      const items = [...prev.items];
-      items[index] = { ...items[index], [field]: value };
-      return { ...prev, items };
+  const optionsForSection = (section: SectionKey) => {
+    const base = sortedSkus.filter((sku) => sections.find((s) => s.key === section)?.filter(sku) && sku.is_active);
+    const selectedIds = new Set(lines[section].map((l) => Number(l.sku_id)).filter(Boolean));
+    const selectedSkus = sortedSkus.filter((sku) => selectedIds.has(sku.id));
+    return [...base, ...selectedSkus.filter((sku) => !base.find((b) => b.id === sku.id))];
+  };
+
+  const handleLineChange = (section: SectionKey, index: number, field: keyof OrderLine, value: string) => {
+    setLines((prev) => {
+      const next = { ...prev } as Record<SectionKey, OrderLine[]>;
+      const updated = [...next[section]];
+      updated[index] = { ...updated[index], [field]: value };
+      next[section] = updated;
+      return next;
     });
   };
 
-  const addOrderItem = () => setOrderForm((prev) => ({ ...prev, items: [...prev.items, { sku_id: "", quantity: "", current_stock: "" }] }));
-  const removeOrderItem = (index: number) =>
-    setOrderForm((prev) => ({ ...prev, items: prev.items.filter((_, idx) => idx !== index) }));
+  const addLine = (section: SectionKey) => setLines((prev) => ({ ...prev, [section]: [...prev[section], { ...initialLine }] }));
+  const removeLine = (section: SectionKey, index: number) => setLines((prev) => ({ ...prev, [section]: prev[section].filter((_, idx) => idx !== index) }));
+
+  const buildItemsPayload = () => {
+    const all = Object.values(lines).flat();
+    return all
+      .filter((line) => line.sku_id && Number(line.quantity) > 0)
+      .map((line) => ({
+        sku_id: Number(line.sku_id),
+        quantity: Number(line.quantity),
+        current_stock: line.current_stock ? Number(line.current_stock) : undefined,
+      })) as OrderItem[];
+  };
 
   const resetForm = () => {
     setEditingId(null);
-    setOrderForm({ destination: "", notes: "", status: "submitted", items: [{ sku_id: "", quantity: "", current_stock: "" }] });
+    setHeader({ destination_deposit_id: "", notes: "" });
+    setLines({ pt: [initialLine], consumibles: [initialLine], papeleria: [initialLine], limpieza: [initialLine] });
   };
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!orderForm.items.length || orderForm.items.some((item) => !item.sku_id || !item.quantity)) {
-      setError("Completa al menos un ítem con producto y cantidad");
+    if (!header.destination_deposit_id) {
+      setError("Selecciona un destino (local)");
+      return;
+    }
+    const items = buildItemsPayload();
+    if (!items.length) {
+      setError("Agrega al menos un ítem en cualquiera de las secciones");
       return;
     }
     try {
       const payload = {
-        destination: orderForm.destination || "Destino sin nombre",
-        status: orderForm.status,
-        notes: orderForm.notes || undefined,
-        items: orderForm.items.map((item) => ({
-          sku_id: Number(item.sku_id),
-          quantity: Number(item.quantity),
-          current_stock: item.current_stock ? Number(item.current_stock) : undefined,
-        })) as OrderItem[],
+        destination_deposit_id: Number(header.destination_deposit_id),
+        notes: header.notes || undefined,
+        items,
       };
       if (editingId) {
         await updateOrder(editingId, payload);
@@ -136,17 +172,26 @@ export function OrdersPage() {
   };
 
   const startEdit = (order: Order) => {
-    setEditingId(order.id);
-    setOrderForm({
-      destination: order.destination,
-      notes: order.notes || "",
-      status: order.status,
-      items: order.items.map((item) => ({
-        sku_id: String(item.sku_id),
-        quantity: String(item.quantity),
-        current_stock: item.current_stock != null ? String(item.current_stock) : "",
-      })),
+    const nextLines: Record<SectionKey, OrderLine[]> = { pt: [], consumibles: [], papeleria: [], limpieza: [] };
+    order.items.forEach((item) => {
+      const sku = skus.find((s) => s.id === item.sku_id);
+      let section: SectionKey = "consumibles";
+      if (sku?.tag === "PT") section = "pt";
+      else if (sku?.tag === "CON" && sku.family === "papeleria") section = "papeleria";
+      else if (sku?.tag === "CON" && sku.family === "limpieza") section = "limpieza";
+      else if (sku?.tag === "CON") section = "consumibles";
+      nextLines[section].push({ sku_id: String(item.sku_id), quantity: String(item.quantity), current_stock: item.current_stock != null ? String(item.current_stock) : "" });
     });
+    const filledLines: Record<SectionKey, OrderLine[]> = {
+      pt: nextLines.pt.length ? nextLines.pt : [initialLine],
+      consumibles: nextLines.consumibles.length ? nextLines.consumibles : [initialLine],
+      papeleria: nextLines.papeleria.length ? nextLines.papeleria : [initialLine],
+      limpieza: nextLines.limpieza.length ? nextLines.limpieza : [initialLine],
+    };
+
+    setEditingId(order.id);
+    setHeader({ destination_deposit_id: order.destination_deposit_id ? String(order.destination_deposit_id) : "", notes: order.notes || "" });
+    setLines(filledLines);
   };
 
   const handleStatusChange = async (orderId: number, status: OrderStatus) => {
@@ -172,6 +217,67 @@ export function OrdersPage() {
     }
   };
 
+  const renderSection = (section: SectionConfig) => {
+    const sectionLines = lines[section.key];
+    const options = optionsForSection(section.key);
+
+    return (
+      <Card variant="outlined">
+        <CardHeader title={section.title} />
+        <Divider />
+        <CardContent>
+          <Stack spacing={1.5}>
+            {sectionLines.map((item, index) => (
+              <Stack key={`${section.key}-${index}`} direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ sm: "center" }}>
+                <TextField
+                  select
+                  label="Producto"
+                  value={item.sku_id}
+                  onChange={(e) => handleLineChange(section.key, index, "sku_id", e.target.value)}
+                  sx={{ flex: 1 }}
+                  helperText={!options.length ? "No hay productos activos en la sección" : undefined}
+                >
+                  {options.map((sku) => (
+                    <MenuItem key={sku.id} value={sku.id}>
+                      {skuLabel(sku.id)}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  label="Cantidad"
+                  type="number"
+                  inputProps={{ step: "0.01" }}
+                  value={item.quantity}
+                  onChange={(e) => handleLineChange(section.key, index, "quantity", e.target.value)}
+                  sx={{ width: 160 }}
+                />
+                <TextField
+                  label="Stock en local"
+                  type="number"
+                  inputProps={{ step: "0.01" }}
+                  value={item.current_stock}
+                  onChange={(e) => handleLineChange(section.key, index, "current_stock", e.target.value)}
+                  sx={{ width: 180 }}
+                />
+                <IconButton
+                  aria-label="Eliminar línea"
+                  color="error"
+                  disabled={sectionLines.length <= 1}
+                  onClick={() => removeLine(section.key, index)}
+                >
+                  <RemoveCircleOutlineIcon />
+                </IconButton>
+              </Stack>
+            ))}
+            <Button variant="outlined" startIcon={<PlaylistAddIcon />} onClick={() => addLine(section.key)} disabled={!options.length}>
+              Agregar ítem
+            </Button>
+          </Stack>
+        </CardContent>
+      </Card>
+    );
+  };
+
   return (
     <Stack spacing={2}>
       <Typography variant="h5" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -186,7 +292,7 @@ export function OrdersPage() {
       <Card>
         <CardHeader
           title={editingId ? "Editar pedido" : "Nuevo pedido"}
-          subheader="Altas, bajas y modificaciones"
+          subheader="Destinos solo locales definidos"
           action={
             <IconButton onClick={loadData}>
               <RefreshIcon />
@@ -196,138 +302,100 @@ export function OrdersPage() {
         <Divider />
         <CardContent>
           <Grid container spacing={2}>
-            <Grid item xs={12} md={7}>
-              <Stack component="form" spacing={2} onSubmit={handleSubmit}>
-                <TextField
-                  label="Destino"
-                  value={orderForm.destination}
-                  onChange={(e) => setOrderForm((prev) => ({ ...prev, destination: e.target.value }))}
-                  placeholder="Local, cliente o depósito"
-                />
-                <TextField
-                  select
-                  label="Estado"
-                  value={orderForm.status}
-                  onChange={(e) => setOrderForm((prev) => ({ ...prev, status: e.target.value as OrderStatus }))}
-                >
-                  {Object.entries(ORDER_STATUS_LABELS).map(([status, label]) => (
-                    <MenuItem key={status} value={status}>
-                      {label}
-                    </MenuItem>
-                  ))}
-                </TextField>
-                <TextField
-                  label="Notas"
-                  value={orderForm.notes}
-                  onChange={(e) => setOrderForm((prev) => ({ ...prev, notes: e.target.value }))}
-                  multiline
-                  minRows={2}
-                />
-                <Typography variant="subtitle2">Ítems</Typography>
-                <Stack spacing={1}>
-                  {orderForm.items.map((item, index) => (
-                    <Stack key={index} direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="center">
+            <Grid item xs={12} md={6}>
+              <TextField
+                select
+                required
+                fullWidth
+                label="Destino (local)"
+                value={header.destination_deposit_id}
+                onChange={(e) => setHeader((prev) => ({ ...prev, destination_deposit_id: e.target.value }))}
+                helperText={!storeDeposits.length ? "Marca los locales como 'Es local' en Maestros > Depósitos" : undefined}
+              >
+                {storeDeposits.map((deposit) => (
+                  <MenuItem key={deposit.id} value={deposit.id}>
+                    {deposit.name}
+                  </MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                label="Notas"
+                value={header.notes}
+                onChange={(e) => setHeader((prev) => ({ ...prev, notes: e.target.value }))}
+              />
+            </Grid>
+          </Grid>
+          <Divider sx={{ my: 2 }} />
+          <Stack spacing={2}>
+            {sections.map((section) => (
+              <div key={section.key}>{renderSection(section)}</div>
+            ))}
+          </Stack>
+          <Box sx={{ mt: 2 }}>
+            <Button variant="contained" onClick={handleSubmit}>
+              {editingId ? "Actualizar" : "Crear"} pedido
+            </Button>
+            {editingId && (
+              <Button sx={{ ml: 1 }} onClick={resetForm}>
+                Cancelar
+              </Button>
+            )}
+          </Box>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader title={`Bandeja de pedidos (${orders.length})`} subheader="Gestión rápida" />
+        <Divider />
+        <CardContent>
+          <Stack spacing={1}>
+            {orders.map((order) => (
+              <Card key={order.id} variant="outlined">
+                <CardContent>
+                  <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" spacing={1} alignItems={{ sm: "center" }}>
+                    <Box>
+                      <Typography fontWeight={700}>Pedido #{order.id}</Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        Destino: {order.destination} · Creado: {new Date(order.created_at).toLocaleDateString()}
+                      </Typography>
+                      <Stack spacing={0.5} sx={{ mt: 1 }}>
+                        {order.items.map((item) => (
+                          <Typography key={item.id} variant="body2">
+                            {skuLabel(item.sku_id)} — {item.quantity}
+                            {item.current_stock != null && ` (stock: ${item.current_stock})`}
+                          </Typography>
+                        ))}
+                      </Stack>
+                    </Box>
+                    <Stack direction="row" spacing={1} alignItems="center">
                       <TextField
                         select
-                        required
-                        label="Producto"
-                        value={item.sku_id}
-                        onChange={(e) => handleItemChange(index, "sku_id", e.target.value)}
-                        sx={{ flex: 1 }}
+                        size="small"
+                        label="Estado"
+                        value={order.status}
+                        onChange={(e) => handleStatusChange(order.id, e.target.value as OrderStatus)}
                       >
-                        {sortedSkus.map((sku) => (
-                          <MenuItem key={sku.id} value={sku.id}>
-                            {sku.name} ({sku.code})
+                        {Object.entries(ORDER_STATUS_LABELS).map(([status, label]) => (
+                          <MenuItem key={status} value={status}>
+                            {label}
                           </MenuItem>
                         ))}
                       </TextField>
-                      <TextField
-                        required
-                        label="Cantidad"
-                        type="number"
-                        inputProps={{ step: "0.01" }}
-                        value={item.quantity}
-                        onChange={(e) => handleItemChange(index, "quantity", e.target.value)}
-                        sx={{ width: 150 }}
-                      />
-                      <TextField
-                        label="Stock local"
-                        type="number"
-                        inputProps={{ step: "0.01" }}
-                        value={item.current_stock}
-                        onChange={(e) => handleItemChange(index, "current_stock", e.target.value)}
-                        sx={{ width: 150 }}
-                      />
-                      <Button disabled={orderForm.items.length <= 1} onClick={() => removeOrderItem(index)} color="error">
-                        Quitar
+                      <Button variant="outlined" onClick={() => startEdit(order)}>
+                        Editar
+                      </Button>
+                      <Button color="error" onClick={() => handleDelete(order.id)}>
+                        Eliminar
                       </Button>
                     </Stack>
-                  ))}
-                  <Button variant="outlined" startIcon={<PlaylistAddIcon />} onClick={addOrderItem}>
-                    Agregar ítem
-                  </Button>
-                </Stack>
-                <Stack direction="row" spacing={1}>
-                  <Button type="submit" variant="contained">
-                    {editingId ? "Actualizar" : "Crear"}
-                  </Button>
-                  {editingId && (
-                    <Button onClick={resetForm}>Cancelar</Button>
-                  )}
-                </Stack>
-              </Stack>
-            </Grid>
-            <Grid item xs={12} md={5}>
-              <Typography variant="subtitle1" sx={{ mb: 1 }}>
-                Bandeja de pedidos ({orders.length})
-              </Typography>
-              <Stack spacing={1}>
-                {orders.map((order) => (
-                  <Card key={order.id} variant="outlined">
-                    <CardContent>
-                      <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" spacing={1} alignItems={{ sm: "center" }}>
-                        <Box>
-                          <Typography fontWeight={700}>Pedido #{order.id}</Typography>
-                          <Typography variant="body2" color="text.secondary">
-                            Destino: {order.destination} · Creado: {new Date(order.created_at).toLocaleDateString()}
-                          </Typography>
-                          <Stack spacing={0.5} sx={{ mt: 1 }}>
-                            {order.items.map((item) => (
-                              <Typography key={item.id} variant="body2">
-                                {skuLabel(item.sku_id)} — {item.quantity}
-                                {item.current_stock != null && ` (stock: ${item.current_stock})`}
-                              </Typography>
-                            ))}
-                          </Stack>
-                        </Box>
-                        <Stack direction="row" spacing={1} alignItems="center">
-                          <TextField
-                            select
-                            size="small"
-                            label="Estado"
-                            value={order.status}
-                            onChange={(e) => handleStatusChange(order.id, e.target.value as OrderStatus)}
-                          >
-                            {Object.entries(ORDER_STATUS_LABELS).map(([status, label]) => (
-                              <MenuItem key={status} value={status}>
-                                {label}
-                              </MenuItem>
-                            ))}
-                          </TextField>
-                          <Button variant="outlined" onClick={() => startEdit(order)}>
-                            Editar
-                          </Button>
-                          <Button color="error" onClick={() => handleDelete(order.id)}>
-                            Eliminar
-                          </Button>
-                        </Stack>
-                      </Stack>
-                    </CardContent>
-                  </Card>
-                ))}
-              </Stack>
-            </Grid>
-          </Grid>
+                  </Stack>
+                </CardContent>
+              </Card>
+            ))}
+          </Stack>
         </CardContent>
       </Card>
     </Stack>

@@ -1,4 +1,5 @@
 import PlaylistAddIcon from "@mui/icons-material/PlaylistAdd";
+import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutline";
 import {
   Alert,
   Box,
@@ -8,6 +9,7 @@ import {
   CardHeader,
   Divider,
   Grid,
+  IconButton,
   MenuItem,
   Stack,
   TextField,
@@ -16,85 +18,225 @@ import {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router-dom";
 
-import { createOrder, fetchSkus, OrderStatus, SKU } from "../lib/api";
+import { createOrder, fetchDeposits, fetchSkus, Deposit, SKU } from "../lib/api";
 
-const ORDER_PIN = "1111";
+const ORDER_PIN = "1959";
+const MAX_PIN_ATTEMPTS = 3;
+
+type OrderLine = { sku_id: string; quantity: string; current_stock: string };
+
+type SectionKey = "pt" | "consumibles" | "papeleria" | "limpieza";
+
+type SectionConfig = {
+  key: SectionKey;
+  title: string;
+  helper?: string;
+  filter: (sku: SKU) => boolean;
+};
+
+const initialLine: OrderLine = { sku_id: "", quantity: "", current_stock: "" };
 
 export function OrderEntryPage() {
   const location = useLocation();
+  const fromMenu = (location.state as { fromMenu?: boolean } | null)?.fromMenu === true;
+
   const [skus, setSkus] = useState<SKU[]>([]);
+  const [deposits, setDeposits] = useState<Deposit[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [pin, setPin] = useState("");
-  const [pinValidated, setPinValidated] = useState<boolean>(() => sessionStorage.getItem("order-entry-pin-ok") === "true");
+  const [pinAttempts, setPinAttempts] = useState(0);
+  const [pinValidated, setPinValidated] = useState<boolean>(fromMenu);
+  const [blocked, setBlocked] = useState(false);
 
-  const [form, setForm] = useState<{ destination: string; sku_id: string; quantity: string; current_stock: string; notes: string }>(
-    {
-      destination: "",
-      sku_id: "",
-      quantity: "",
-      current_stock: "",
-      notes: "",
-    }
-  );
+  const [header, setHeader] = useState<{ destination_deposit_id: string; notes: string }>({ destination_deposit_id: "", notes: "" });
+  const [lines, setLines] = useState<Record<SectionKey, OrderLine[]>>({
+    pt: [initialLine],
+    consumibles: [initialLine],
+    papeleria: [initialLine],
+    limpieza: [initialLine],
+  });
 
   useEffect(() => {
-    void loadSkus();
+    void loadCatalog();
   }, []);
 
   useEffect(() => {
-    const fromMenu = (location.state as { fromMenu?: boolean } | null)?.fromMenu;
-    if (fromMenu && !pinValidated) {
+    if (fromMenu) {
       setPinValidated(true);
-      sessionStorage.setItem("order-entry-pin-ok", "true");
     }
-  }, [location.state, pinValidated]);
+  }, [fromMenu]);
 
-  const sortedSkus = useMemo(() => [...skus].sort((a, b) => a.name.localeCompare(b.name)), [skus]);
-
-  const loadSkus = async () => {
+  const loadCatalog = async () => {
     try {
-      const skuList = await fetchSkus();
+      const [skuList, depositList] = await Promise.all([
+        fetchSkus({ tags: ["PT", "CON"], include_inactive: false }),
+        fetchDeposits(),
+      ]);
       setSkus(skuList);
+      setDeposits(depositList);
     } catch (err) {
       console.error(err);
-      setError("No pudimos cargar los productos. ¿Backend activo?");
+      setError("No pudimos cargar productos o locales. ¿Backend activo?");
     }
+  };
+
+  const sortedSkus = useMemo(() => [...skus].sort((a, b) => a.name.localeCompare(b.name)), [skus]);
+  const storeDeposits = useMemo(() => deposits.filter((d) => d.is_store), [deposits]);
+
+  const sections: SectionConfig[] = [
+    {
+      key: "pt",
+      title: "Productos terminados",
+      filter: (sku) => sku.tag === "PT" && sku.is_active,
+    },
+    {
+      key: "consumibles",
+      title: "Consumibles (depósito)",
+      filter: (sku) => sku.tag === "CON" && sku.family === "consumible" && sku.is_active,
+    },
+    {
+      key: "papeleria",
+      title: "Papelería",
+      filter: (sku) => sku.tag === "CON" && sku.family === "papeleria" && sku.is_active,
+    },
+    {
+      key: "limpieza",
+      title: "Limpieza",
+      filter: (sku) => sku.tag === "CON" && sku.family === "limpieza" && sku.is_active,
+    },
+  ];
+
+  const renderSection = (config: SectionConfig) => {
+    const options = sortedSkus.filter(config.filter);
+    const sectionLines = lines[config.key];
+
+    return (
+      <Card variant="outlined">
+        <CardHeader title={config.title} subheader={config.helper} />
+        <Divider />
+        <CardContent>
+          <Stack spacing={1.5}>
+            {sectionLines.map((item, index) => (
+              <Stack key={`${config.key}-${index}`} direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ sm: "center" }}>
+                <TextField
+                  select
+                  label="Producto"
+                  value={item.sku_id}
+                  onChange={(e) => handleLineChange(config.key, index, "sku_id", e.target.value)}
+                  sx={{ flex: 1 }}
+                  helperText={!options.length ? "No hay productos activos en esta sección" : undefined}
+                >
+                  {options.map((sku) => (
+                    <MenuItem key={sku.id} value={sku.id}>
+                      {sku.name} ({sku.code})
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  label="Cantidad"
+                  type="number"
+                  inputProps={{ step: "0.01" }}
+                  value={item.quantity}
+                  onChange={(e) => handleLineChange(config.key, index, "quantity", e.target.value)}
+                  sx={{ width: 180 }}
+                />
+                <TextField
+                  label="Stock en local (informativo)"
+                  type="number"
+                  inputProps={{ step: "0.01" }}
+                  value={item.current_stock}
+                  onChange={(e) => handleLineChange(config.key, index, "current_stock", e.target.value)}
+                  sx={{ width: 220 }}
+                />
+                <IconButton
+                  aria-label="Eliminar línea"
+                  color="error"
+                  disabled={sectionLines.length <= 1}
+                  onClick={() => removeLine(config.key, index)}
+                >
+                  <RemoveCircleOutlineIcon />
+                </IconButton>
+              </Stack>
+            ))}
+            <Button variant="outlined" onClick={() => addLine(config.key)} startIcon={<PlaylistAddIcon />}
+ disabled={!options.length}>
+              Agregar ítem
+            </Button>
+          </Stack>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  const handleLineChange = (section: SectionKey, index: number, field: keyof OrderLine, value: string) => {
+    setLines((prev) => {
+      const next = { ...prev };
+      const updated = [...next[section]];
+      updated[index] = { ...updated[index], [field]: value };
+      next[section] = updated;
+      return next;
+    });
+  };
+
+  const addLine = (section: SectionKey) => {
+    setLines((prev) => ({ ...prev, [section]: [...prev[section], { ...initialLine }] }));
+  };
+
+  const removeLine = (section: SectionKey, index: number) => {
+    setLines((prev) => ({ ...prev, [section]: prev[section].filter((_, idx) => idx !== index) }));
   };
 
   const handlePinSubmit = (event: FormEvent) => {
     event.preventDefault();
+    if (blocked) return;
     if (pin === ORDER_PIN) {
-      sessionStorage.setItem("order-entry-pin-ok", "true");
       setPinValidated(true);
       setError(null);
       return;
     }
-    setError("PIN incorrecto. Intenta nuevamente.");
+    const attempts = pinAttempts + 1;
+    setPinAttempts(attempts);
+    if (attempts >= MAX_PIN_ATTEMPTS) {
+      setBlocked(true);
+      setError("PIN incorrecto. Intentos agotados. Recarga la página para reintentar.");
+    } else {
+      setError(`PIN incorrecto. Intento ${attempts} de ${MAX_PIN_ATTEMPTS}.`);
+    }
+  };
+
+  const buildItemsPayload = () => {
+    const allLines = Object.values(lines).flat();
+    return allLines
+      .filter((line) => line.sku_id && Number(line.quantity) > 0)
+      .map((line) => ({
+        sku_id: Number(line.sku_id),
+        quantity: Number(line.quantity),
+        current_stock: line.current_stock ? Number(line.current_stock) : undefined,
+      }));
   };
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!form.sku_id || !form.quantity) {
-      setError("Completa producto y cantidad");
+    if (!header.destination_deposit_id) {
+      setError("Selecciona un destino (local)");
+      return;
+    }
+    const items = buildItemsPayload();
+    if (!items.length) {
+      setError("Agrega al menos un ítem en cualquiera de las secciones");
       return;
     }
     try {
-      const payloadStatus: OrderStatus = "submitted";
       await createOrder({
-        destination: form.destination || "Pedido de local",
-        notes: form.notes || undefined,
-        status: payloadStatus,
-        items: [
-          {
-            sku_id: Number(form.sku_id),
-            quantity: Number(form.quantity),
-            current_stock: form.current_stock ? Number(form.current_stock) : undefined,
-          },
-        ],
+        destination_deposit_id: Number(header.destination_deposit_id),
+        notes: header.notes || undefined,
+        items,
       });
       setSuccess("Pedido enviado");
-      setForm({ destination: "", sku_id: "", quantity: "", current_stock: "", notes: "" });
+      setError(null);
+      setHeader({ destination_deposit_id: "", notes: "" });
+      setLines({ pt: [initialLine], consumibles: [initialLine], papeleria: [initialLine], limpieza: [initialLine] });
     } catch (err) {
       console.error(err);
       setError("No pudimos registrar el pedido. Revisa los datos");
@@ -118,10 +260,14 @@ export function OrderEntryPage() {
                 inputProps={{ maxLength: 4, inputMode: "numeric" }}
                 onChange={(e) => setPin(e.target.value)}
                 required
+                disabled={blocked}
               />
-              <Button type="submit" variant="contained">
+              <Button type="submit" variant="contained" disabled={blocked}>
                 Validar
               </Button>
+              <Typography variant="body2" color="text.secondary">
+                Tienes hasta {MAX_PIN_ATTEMPTS} intentos. El PIN es de 4 dígitos.
+              </Typography>
             </Stack>
           </CardContent>
         </Card>
@@ -141,70 +287,51 @@ export function OrderEntryPage() {
         </Alert>
       )}
       <Card>
-        <CardHeader title="Nuevo pedido" subheader="Locales ingresan cantidad y stock actual" />
+        <CardHeader title="Encabezado" subheader="Destino obligatorio" />
         <Divider />
         <CardContent>
           <Grid container spacing={2}>
-            <Grid item xs={12} md={8}>
-              <Stack component="form" spacing={2} onSubmit={handleSubmit}>
-                <TextField
-                  label="Local / destino"
-                  value={form.destination}
-                  onChange={(e) => setForm((prev) => ({ ...prev, destination: e.target.value }))}
-                  placeholder="Ej: Local Centro"
-                />
-                <TextField
-                  select
-                  required
-                  label="Producto"
-                  value={form.sku_id}
-                  onChange={(e) => setForm((prev) => ({ ...prev, sku_id: e.target.value }))}
-                >
-                  {sortedSkus.map((sku) => (
-                    <MenuItem key={sku.id} value={sku.id}>
-                      {sku.name} ({sku.code})
-                    </MenuItem>
-                  ))}
-                </TextField>
-                <TextField
-                  required
-                  label="Cantidad solicitada"
-                  type="number"
-                  inputProps={{ step: "0.01" }}
-                  value={form.quantity}
-                  onChange={(e) => setForm((prev) => ({ ...prev, quantity: e.target.value }))}
-                />
-                <TextField
-                  label="Stock actual en local"
-                  type="number"
-                  inputProps={{ step: "0.01" }}
-                  value={form.current_stock}
-                  onChange={(e) => setForm((prev) => ({ ...prev, current_stock: e.target.value }))}
-                  helperText="Informativo para el equipo de despacho"
-                />
-                <TextField
-                  label="Notas"
-                  value={form.notes}
-                  onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))}
-                  multiline
-                />
-                <Button type="submit" variant="contained" size="large">
-                  Enviar pedido
-                </Button>
-              </Stack>
+            <Grid item xs={12} md={6}>
+              <TextField
+                select
+                required
+                fullWidth
+                label="Destino (local)"
+                value={header.destination_deposit_id}
+                onChange={(e) => setHeader((prev) => ({ ...prev, destination_deposit_id: e.target.value }))}
+                helperText={!storeDeposits.length ? "Crea locales en Maestros > Depósitos marcando 'Es local'" : undefined}
+              >
+                {storeDeposits.map((deposit) => (
+                  <MenuItem key={deposit.id} value={deposit.id}>
+                    {deposit.name}
+                  </MenuItem>
+                ))}
+              </TextField>
             </Grid>
-            <Grid item xs={12} md={4}>
-              <Box sx={{ bgcolor: "#f8fafc", p: 2, borderRadius: 2, border: "1px solid #e5e7eb" }}>
-                <Typography fontWeight={700}>Acceso directo</Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  Esta pantalla puede abrirse directamente desde un acceso en el local. Si se ingresa la URL manualmente se solicitará el PIN de 4 dígitos.
-                </Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  Formato de producto: nombre + SKU, ordenados alfabéticamente para uso en móviles.
-                </Typography>
-              </Box>
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                label="Notas"
+                value={header.notes}
+                onChange={(e) => setHeader((prev) => ({ ...prev, notes: e.target.value }))}
+              />
             </Grid>
           </Grid>
+        </CardContent>
+      </Card>
+
+      <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+        Ítems por sección (solo productos activos)
+      </Typography>
+      {sections.map((section) => (
+        <div key={section.key}>{renderSection(section)}</div>
+      ))}
+
+      <Card>
+        <CardContent>
+          <Button type="submit" variant="contained" size="large" onClick={handleSubmit}>
+            Enviar pedido
+          </Button>
         </CardContent>
       </Card>
     </Stack>

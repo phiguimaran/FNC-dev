@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 from sqlmodel import SQLModel
 
-from .models.common import MovementType, OrderStatus, SKUTag, UnitOfMeasure
+from .models.common import MovementType, OrderStatus, SKUTag, SKUFamily, UnitOfMeasure
 
 
 class SKUBase(SQLModel):
@@ -11,6 +11,8 @@ class SKUBase(SQLModel):
     tag: SKUTag
     unit: UnitOfMeasure = UnitOfMeasure.UNIT
     notes: str | None = None
+    family: SKUFamily | None = None
+    is_active: bool = True
 
 
 class SKUCreate(SKUBase):
@@ -22,6 +24,8 @@ class SKUUpdate(SQLModel):
     tag: SKUTag | None = None
     unit: UnitOfMeasure | None = None
     notes: str | None = None
+    family: SKUFamily | None = None
+    is_active: bool | None = None
 
 
 class SKURead(SKUBase):
@@ -32,12 +36,14 @@ class DepositCreate(SQLModel):
     name: str
     location: str | None = None
     controls_lot: bool = True
+    is_store: bool = False
 
 
 class DepositUpdate(SQLModel):
     name: str | None = None
     location: str | None = None
     controls_lot: bool | None = None
+    is_store: bool | None = None
 
 
 class DepositRead(SQLModel):
@@ -45,6 +51,7 @@ class DepositRead(SQLModel):
     name: str
     location: str | None = None
     controls_lot: bool
+    is_store: bool
 
 
 class RecipeItemPayload(SQLModel):
@@ -148,7 +155,7 @@ class OrderItemPayload(SQLModel):
 
 
 class OrderCreate(SQLModel):
-    destination: str
+    destination_deposit_id: int
     requested_for: date | None = None
     status: OrderStatus = OrderStatus.SUBMITTED
     notes: str | None = None
@@ -156,7 +163,7 @@ class OrderCreate(SQLModel):
 
 
 class OrderUpdate(SQLModel):
-    destination: str | None = None
+    destination_deposit_id: int | None = None
     requested_for: date | None = None
     status: OrderStatus | None = None
     notes: str | None = None
@@ -176,6 +183,7 @@ class OrderItemRead(OrderItemPayload):
 class OrderRead(SQLModel):
     id: int
     destination: str
+    destination_deposit_id: int | None = None
     requested_for: date | None = None
     status: OrderStatus
     notes: str | None = None

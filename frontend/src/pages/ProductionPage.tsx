@@ -25,17 +25,9 @@ import {
 import { AddCircleOutline, DeleteForever } from "@mui/icons-material";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
-import {
-  createRecipe,
-  createStockMovement,
-  Deposit,
-  fetchDeposits,
-  fetchRecipes,
-  fetchSkus,
-  Recipe,
-  SKUTag,
-  SKU,
-} from "../lib/api";
+import { createRecipe, createStockMovement, Deposit, fetchDeposits, fetchRecipes, fetchSkus, Recipe, SKUTag, SKU } from "../lib/api";
+
+const PRODUCTION_TAGS: SKUTag[] = ["PT", "SEMI"];
 
 const PRODUCTION_TAGS: SKUTag[] = ["PT", "SEMI"];
 
@@ -76,7 +68,11 @@ export function ProductionPage() {
 
   const loadData = async () => {
     try {
-      const [skuList, depositList, recipeList] = await Promise.all([fetchSkus(), fetchDeposits(), fetchRecipes()]);
+      const [skuList, depositList, recipeList] = await Promise.all([
+        fetchSkus({ tags: PRODUCTION_TAGS }),
+        fetchDeposits(),
+        fetchRecipes(),
+      ]);
       setSkus(skuList);
       setDeposits(depositList);
       setRecipes(recipeList);

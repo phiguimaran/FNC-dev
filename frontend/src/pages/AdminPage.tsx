@@ -17,6 +17,13 @@ import {
   Grid,
   IconButton,
   MenuItem,
+  FormControlLabel,
+  Switch,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
   Stack,
   Tab,
   Tabs,
@@ -44,6 +51,7 @@ import {
   fetchUsers,
   Recipe,
   SKUTag,
+  SKUFamily,
   SKU,
   UnitOfMeasure,
   UnitOption,
@@ -71,21 +79,31 @@ export function AdminPage() {
   const [units, setUnits] = useState<UnitOption[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [skuSearch, setSkuSearch] = useState("");
+  const [recipeSearch, setRecipeSearch] = useState("");
+  const [depositSearch, setDepositSearch] = useState("");
+  const [userSearch, setUserSearch] = useState("");
+  const [showInactiveSkus, setShowInactiveSkus] = useState(false);
 
-  const [skuForm, setSkuForm] = useState<{ id?: number; code: string; name: string; tag: SKUTag; unit: UnitOfMeasure; notes: string }>(
+  const [skuForm, setSkuForm] = useState<{ id?: number; code: string; name: string; tag: SKUTag; unit: UnitOfMeasure; notes: string; family: SKUFamily | ""; is_active: boolean }>(
     {
       code: "",
       name: "",
       tag: "MP",
       unit: "unit",
       notes: "",
+      family: "",
+      is_active: true,
     }
   );
-  const [depositForm, setDepositForm] = useState<{ id?: number; name: string; location: string; controls_lot: boolean }>({
-    name: "",
-    location: "",
-    controls_lot: true,
-  });
+  const [depositForm, setDepositForm] = useState<{ id?: number; name: string; location: string; controls_lot: boolean; is_store: boolean }>(
+    {
+      name: "",
+      location: "",
+      controls_lot: true,
+      is_store: false,
+    }
+  );
   const [recipeForm, setRecipeForm] = useState<{ id?: number; product_id: string; name: string; items: RecipeFormItem[] }>(
     {
       product_id: "",
@@ -111,10 +129,47 @@ export function AdminPage() {
   const sortedDeposits = useMemo(() => [...deposits].sort((a, b) => a.name.localeCompare(b.name)), [deposits]);
   const skuMap = useMemo(() => new Map(skus.map((sku) => [sku.id, sku])), [skus]);
 
+  const matchesSearch = (text: string, search: string) => text.toLowerCase().includes(search.trim().toLowerCase());
+
+  const filteredSkus = useMemo(
+    () =>
+      sortedSkus.filter(
+        (sku) => (showInactiveSkus || sku.is_active) && (!skuSearch || matchesSearch(`${sku.name} ${sku.code}`, skuSearch))
+      ),
+    [sortedSkus, showInactiveSkus, skuSearch]
+  );
+  const recipeComponents = useMemo(
+    () => sortedSkus.filter((sku) => PRODUCTION_TAGS.includes(sku.tag) && (showInactiveSkus || sku.is_active)),
+    [sortedSkus, showInactiveSkus]
+  );
+  const filteredRecipes = useMemo(
+    () =>
+      recipes.filter((recipe) => {
+        if (!recipeSearch) return true;
+        const product = skuMap.get(recipe.product_id);
+        return matchesSearch(`${recipe.name} ${product?.name ?? ""}`, recipeSearch);
+      }),
+    [recipes, recipeSearch, skuMap]
+  );
+  const filteredDeposits = useMemo(
+    () =>
+      sortedDeposits.filter((deposit) =>
+        depositSearch ? matchesSearch(`${deposit.name} ${deposit.location ?? ""}`, depositSearch) : true
+      ),
+    [sortedDeposits, depositSearch]
+  );
+  const filteredUsers = useMemo(
+    () =>
+      users.filter((user) =>
+        userSearch ? matchesSearch(`${user.full_name} ${user.email} ${user.role_name ?? ""}`, userSearch) : true
+      ),
+    [users, userSearch]
+  );
+
   const loadData = async () => {
     try {
       const [skuList, depositList, recipeList, roleList, userList, unitList] = await Promise.all([
-        fetchSkus(),
+        fetchSkus({ include_inactive: true }),
         fetchDeposits(),
         fetchRecipes(),
         fetchRoles(),
@@ -142,14 +197,21 @@ export function AdminPage() {
   const handleSkuSubmit = async (event: FormEvent) => {
     event.preventDefault();
     try {
+      const { id, ...rest } = skuForm;
+      const payload = {
+        ...rest,
+        notes: skuForm.notes || null,
+        family: skuForm.tag === "CON" ? (skuForm.family || null) : null,
+        is_active: skuForm.is_active,
+      };
       if (skuForm.id) {
-        await updateSku(skuForm.id, { ...skuForm, notes: skuForm.notes || null });
+        await updateSku(skuForm.id, payload);
         setSuccess("Producto actualizado");
       } else {
-        await createSku({ ...skuForm, notes: skuForm.notes || null });
+        await createSku(payload as Omit<SKU, "id">);
         setSuccess("Producto creado");
       }
-      setSkuForm({ code: "", name: "", tag: "MP", unit: "unit", notes: "" });
+      setSkuForm({ code: "", name: "", tag: "MP", unit: "unit", notes: "", family: "", is_active: true });
       await loadData();
     } catch (err) {
       console.error(err);
@@ -160,14 +222,16 @@ export function AdminPage() {
   const handleDepositSubmit = async (event: FormEvent) => {
     event.preventDefault();
     try {
+      const { id, ...rest } = depositForm;
+      const payload = { ...rest, location: depositForm.location || null };
       if (depositForm.id) {
-        await updateDeposit(depositForm.id, { ...depositForm, location: depositForm.location || null });
+        await updateDeposit(depositForm.id, payload);
         setSuccess("Depósito actualizado");
       } else {
-        await createDeposit({ ...depositForm, location: depositForm.location || null });
+        await createDeposit(payload);
         setSuccess("Depósito creado");
       }
-      setDepositForm({ name: "", location: "", controls_lot: true });
+      setDepositForm({ name: "", location: "", controls_lot: true, is_store: false });
       await loadData();
     } catch (err) {
       console.error(err);
@@ -249,9 +313,16 @@ export function AdminPage() {
     setTab("recetas");
   };
 
-  const startEditSku = (sku: SKU) => setSkuForm({ ...sku, notes: sku.notes ?? "", id: sku.id });
+  const startEditSku = (sku: SKU) =>
+    setSkuForm({ ...sku, notes: sku.notes ?? "", id: sku.id, family: sku.family ?? "", is_active: sku.is_active });
   const startEditDeposit = (deposit: Deposit) =>
-    setDepositForm({ id: deposit.id, name: deposit.name, location: deposit.location ?? "", controls_lot: deposit.controls_lot });
+    setDepositForm({
+      id: deposit.id,
+      name: deposit.name,
+      location: deposit.location ?? "",
+      controls_lot: deposit.controls_lot,
+      is_store: deposit.is_store,
+    });
   const startEditUser = (user: User) =>
     setUserForm({
       id: user.id,
@@ -271,7 +342,7 @@ export function AdminPage() {
     return component ? unitLabel(component.unit) : "";
   };
 
-  const filteredProducts = sortedSkus.filter((sku) => PRODUCTION_TAGS.includes(sku.tag));
+  const filteredProducts = recipeComponents;
 
   const handleDelete = async (type: "sku" | "deposit" | "recipe" | "user", id: number) => {
     if (!window.confirm("¿Eliminar el registro?")) return;
@@ -304,6 +375,19 @@ export function AdminPage() {
                 <MenuItem value="PT">Producto terminado</MenuItem>
                 <MenuItem value="CON">Consumible / material</MenuItem>
               </TextField>
+              {skuForm.tag === "CON" && (
+                <TextField
+                  select
+                  label="Familia (consumibles)"
+                  value={skuForm.family}
+                  onChange={(e) => setSkuForm((prev) => ({ ...prev, family: e.target.value as SKUFamily }))}
+                  required
+                >
+                  <MenuItem value="consumible">Consumible</MenuItem>
+                  <MenuItem value="papeleria">Papelería</MenuItem>
+                  <MenuItem value="limpieza">Limpieza</MenuItem>
+                </TextField>
+              )}
               <TextField
                 select
                 label="Unidad"
@@ -323,12 +407,16 @@ export function AdminPage() {
                 multiline
                 minRows={2}
               />
+              <FormControlLabel
+                control={<Switch checked={skuForm.is_active} onChange={(e) => setSkuForm((prev) => ({ ...prev, is_active: e.target.checked }))} />}
+                label="Activo (visible por defecto en los combos)"
+              />
               <Stack direction="row" spacing={1}>
                 <Button type="submit" variant="contained">
                   {skuForm.id ? "Actualizar" : "Crear"}
                 </Button>
                 {skuForm.id && (
-                  <Button onClick={() => setSkuForm({ code: "", name: "", tag: "MP", unit: "unit", notes: "" })}>
+                  <Button onClick={() => setSkuForm({ id: undefined, code: "", name: "", tag: "MP", unit: "unit", notes: "", family: "", is_active: true })}>
                     Cancelar
                   </Button>
                 )}
@@ -339,37 +427,63 @@ export function AdminPage() {
       </Grid>
       <Grid item xs={12} md={8}>
         <Card>
-          <CardHeader title="Productos" subheader="Alta, baja y modificación" action={<Chip label={`${skus.length} items`} />} />
+          <CardHeader
+            title="Productos"
+            subheader="Listado compacto"
+            action={<Chip label={`${filteredSkus.length} de ${skus.length}`} />}
+          />
           <Divider />
           <CardContent>
-            <Stack spacing={1}>
-              {sortedSkus.map((sku) => (
-                <Card key={sku.id} variant="outlined">
-                  <CardContent>
-                    <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" spacing={1} alignItems={{ sm: "center" }}>
-                      <Box>
-                        <Typography fontWeight={700}>{skuLabel(sku)}</Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          Tipo: {sku.tag} · Unidad: {unitLabel(sku.unit)} {sku.notes ? `· ${sku.notes}` : ""}
-                        </Typography>
-                      </Box>
-                      <Box>
-                        <Tooltip title="Editar">
-                          <IconButton onClick={() => startEditSku(sku)}>
-                            <EditIcon />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Eliminar">
-                          <IconButton color="error" onClick={() => handleDelete("sku", sku.id)}>
-                            <DeleteIcon />
-                          </IconButton>
-                        </Tooltip>
-                      </Box>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              ))}
+            <Stack direction={{ xs: "column", md: "row" }} spacing={2} justifyContent="space-between" alignItems={{ md: "center" }} sx={{ mb: 2 }}>
+              <TextField
+                label="Buscar por nombre o código"
+                value={skuSearch}
+                onChange={(e) => setSkuSearch(e.target.value)}
+                size="small"
+                sx={{ maxWidth: 320 }}
+              />
+              <FormControlLabel
+                control={<Switch checked={showInactiveSkus} onChange={(e) => setShowInactiveSkus(e.target.checked)} />}
+                label="Mostrar inactivos"
+              />
             </Stack>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Código</TableCell>
+                  <TableCell>Nombre</TableCell>
+                  <TableCell>Tipo</TableCell>
+                  <TableCell>Familia</TableCell>
+                  <TableCell>Unidad</TableCell>
+                  <TableCell>Estado</TableCell>
+                  <TableCell align="right">Acciones</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {filteredSkus.map((sku) => (
+                  <TableRow key={sku.id} hover>
+                    <TableCell>{sku.code}</TableCell>
+                    <TableCell>{sku.name}</TableCell>
+                    <TableCell>{sku.tag}</TableCell>
+                    <TableCell>{sku.tag === "CON" ? sku.family || "—" : "—"}</TableCell>
+                    <TableCell>{unitLabel(sku.unit)}</TableCell>
+                    <TableCell>{sku.is_active ? "Activo" : "Inactivo"}</TableCell>
+                    <TableCell align="right">
+                      <Tooltip title="Editar">
+                        <IconButton size="small" onClick={() => startEditSku(sku)}>
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Eliminar">
+                        <IconButton size="small" color="error" onClick={() => handleDelete("sku", sku.id)}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </CardContent>
         </Card>
       </Grid>
@@ -395,12 +509,16 @@ export function AdminPage() {
                 <MenuItem value="si">Sí</MenuItem>
                 <MenuItem value="no">No</MenuItem>
               </TextField>
+              <FormControlLabel
+                control={<Switch checked={depositForm.is_store} onChange={(e) => setDepositForm((prev) => ({ ...prev, is_store: e.target.checked }))} />}
+                label="Es local (destino de pedidos)"
+              />
               <Stack direction="row" spacing={1}>
                 <Button type="submit" variant="contained">
                   {depositForm.id ? "Actualizar" : "Crear"}
                 </Button>
                 {depositForm.id && (
-                  <Button onClick={() => setDepositForm({ name: "", location: "", controls_lot: true })}>Cancelar</Button>
+                  <Button onClick={() => setDepositForm({ name: "", location: "", controls_lot: true, is_store: false })}>Cancelar</Button>
                 )}
               </Stack>
             </Stack>
@@ -409,37 +527,55 @@ export function AdminPage() {
       </Grid>
       <Grid item xs={12} md={8}>
         <Card>
-          <CardHeader title="Depósitos" subheader="Listado y edición" action={<Chip label={`${deposits.length} items`} />} />
+          <CardHeader
+            title="Depósitos"
+            subheader="Listado y edición"
+            action={<Chip label={`${filteredDeposits.length} de ${deposits.length}`} />}
+          />
           <Divider />
           <CardContent>
-            <Stack spacing={1}>
-              {sortedDeposits.map((deposit) => (
-                <Card key={deposit.id} variant="outlined">
-                  <CardContent>
-                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1} justifyContent="space-between" alignItems={{ sm: "center" }}>
-                      <Box>
-                        <Typography fontWeight={700}>{deposit.name}</Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          {deposit.location || "Sin ubicación"} · Controla lote: {deposit.controls_lot ? "Sí" : "No"}
-                        </Typography>
-                      </Box>
-                      <Box>
-                        <Tooltip title="Editar">
-                          <IconButton onClick={() => startEditDeposit(deposit)}>
-                            <EditIcon />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Eliminar">
-                          <IconButton color="error" onClick={() => handleDelete("deposit", deposit.id)}>
-                            <DeleteIcon />
-                          </IconButton>
-                        </Tooltip>
-                      </Box>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              ))}
-            </Stack>
+            <Box sx={{ mb: 2 }}>
+              <TextField
+                label="Buscar por nombre o ubicación"
+                value={depositSearch}
+                onChange={(e) => setDepositSearch(e.target.value)}
+                size="small"
+                sx={{ maxWidth: 320 }}
+              />
+            </Box>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Nombre</TableCell>
+                  <TableCell>Ubicación</TableCell>
+                  <TableCell>Controla lote</TableCell>
+                  <TableCell>Es local</TableCell>
+                  <TableCell align="right">Acciones</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {filteredDeposits.map((deposit) => (
+                  <TableRow key={deposit.id} hover>
+                    <TableCell>{deposit.name}</TableCell>
+                    <TableCell>{deposit.location || "—"}</TableCell>
+                    <TableCell>{deposit.controls_lot ? "Sí" : "No"}</TableCell>
+                    <TableCell>{deposit.is_store ? "Sí" : "No"}</TableCell>
+                    <TableCell align="right">
+                      <Tooltip title="Editar">
+                        <IconButton size="small" onClick={() => startEditDeposit(deposit)}>
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Eliminar">
+                        <IconButton size="small" color="error" onClick={() => handleDelete("deposit", deposit.id)}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </CardContent>
         </Card>
       </Grid>
@@ -485,7 +621,7 @@ export function AdminPage() {
                       value={item.component_id}
                       onChange={(e) => handleRecipeItemChange(index, "component_id", e.target.value)}
                     >
-                      {sortedSkus.map((sku) => (
+                      {recipeComponents.map((sku) => (
                         <MenuItem key={sku.id} value={sku.id}>
                           {skuLabel(sku)}
                         </MenuItem>
@@ -530,47 +666,51 @@ export function AdminPage() {
       </Grid>
       <Grid item xs={12} md={7}>
         <Card>
-          <CardHeader title="Recetas registradas" subheader="BOM por producto" action={<Chip label={`${recipes.length} recetas`} />} />
+          <CardHeader
+            title="Recetas registradas"
+            subheader="Listado compacto (sin previsualizar ingredientes)"
+            action={<Chip label={`${filteredRecipes.length} de ${recipes.length}`} />}
+          />
           <Divider />
           <CardContent>
-            <Stack spacing={1}>
-              {recipes.map((recipe) => (
-                <Card key={recipe.id} variant="outlined">
-                  <CardContent>
-                    <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" spacing={1}>
-                      <Box>
-                        <Typography fontWeight={700}>
-                          {skuMap.get(recipe.product_id) ? skuLabel(skuMap.get(recipe.product_id) as SKU) : `SKU ${recipe.product_id}`}
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          {recipe.name}
-                        </Typography>
-                        <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mt: 1 }}>
-                          {recipe.items.map((item, idx) => (
-                            <Chip
-                              key={`${recipe.id}-${idx}`}
-                              label={`${item.component_name ?? ""} (${item.component_code ?? ""}) · ${item.quantity} ${unitLabel(item.component_unit)}`}
-                            />
-                          ))}
-                        </Stack>
-                      </Box>
-                      <Box>
-                        <Tooltip title="Editar">
-                          <IconButton onClick={() => startEditRecipe(recipe)}>
-                            <EditIcon />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Eliminar">
-                          <IconButton color="error" onClick={() => handleDelete("recipe", recipe.id)}>
-                            <DeleteIcon />
-                          </IconButton>
-                        </Tooltip>
-                      </Box>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              ))}
-            </Stack>
+            <Box sx={{ mb: 2 }}>
+              <TextField
+                label="Buscar por nombre o producto"
+                value={recipeSearch}
+                onChange={(e) => setRecipeSearch(e.target.value)}
+                size="small"
+                sx={{ maxWidth: 320 }}
+              />
+            </Box>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Receta</TableCell>
+                  <TableCell>Producto</TableCell>
+                  <TableCell align="right">Acciones</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {filteredRecipes.map((recipe) => (
+                  <TableRow key={recipe.id} hover>
+                    <TableCell>{recipe.name || "Receta"}</TableCell>
+                    <TableCell>{skuMap.get(recipe.product_id) ? skuLabel(skuMap.get(recipe.product_id) as SKU) : `SKU ${recipe.product_id}`}</TableCell>
+                    <TableCell align="right">
+                      <Tooltip title="Editar">
+                        <IconButton size="small" onClick={() => startEditRecipe(recipe)}>
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Eliminar">
+                        <IconButton size="small" color="error" onClick={() => handleDelete("recipe", recipe.id)}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </CardContent>
         </Card>
       </Grid>
@@ -633,37 +773,55 @@ export function AdminPage() {
       </Grid>
       <Grid item xs={12} md={7}>
         <Card>
-          <CardHeader title="Usuarios" subheader="Alta, baja y modificación" action={<Chip label={`${users.length} usuarios`} />} />
+          <CardHeader
+            title="Usuarios"
+            subheader="Alta, baja y modificación"
+            action={<Chip label={`${filteredUsers.length} de ${users.length}`} />}
+          />
           <Divider />
           <CardContent>
-            <Stack spacing={1}>
-              {users.map((user) => (
-                <Card key={user.id} variant="outlined">
-                  <CardContent>
-                    <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" spacing={1} alignItems={{ sm: "center" }}>
-                      <Box>
-                        <Typography fontWeight={700}>{user.full_name}</Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          {user.email} · Rol: {user.role_name || "N/A"} · Estado: {user.is_active ? "Activo" : "Inactivo"}
-                        </Typography>
-                      </Box>
-                      <Box>
-                        <Tooltip title="Editar">
-                          <IconButton onClick={() => startEditUser(user)}>
-                            <EditIcon />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Eliminar">
-                          <IconButton color="error" onClick={() => handleDelete("user", user.id)}>
-                            <DeleteIcon />
-                          </IconButton>
-                        </Tooltip>
-                      </Box>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              ))}
-            </Stack>
+            <Box sx={{ mb: 2 }}>
+              <TextField
+                label="Buscar por nombre, email o rol"
+                value={userSearch}
+                onChange={(e) => setUserSearch(e.target.value)}
+                size="small"
+                sx={{ maxWidth: 320 }}
+              />
+            </Box>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Nombre</TableCell>
+                  <TableCell>Email</TableCell>
+                  <TableCell>Rol</TableCell>
+                  <TableCell>Estado</TableCell>
+                  <TableCell align="right">Acciones</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {filteredUsers.map((user) => (
+                  <TableRow key={user.id} hover>
+                    <TableCell>{user.full_name}</TableCell>
+                    <TableCell>{user.email}</TableCell>
+                    <TableCell>{user.role_name || "—"}</TableCell>
+                    <TableCell>{user.is_active ? "Activo" : "Inactivo"}</TableCell>
+                    <TableCell align="right">
+                      <Tooltip title="Editar">
+                        <IconButton size="small" onClick={() => startEditUser(user)}>
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Eliminar">
+                        <IconButton size="small" color="error" onClick={() => handleDelete("user", user.id)}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </CardContent>
         </Card>
       </Grid>

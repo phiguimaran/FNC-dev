@@ -16,6 +16,7 @@ class Deposit(TimestampedModel, table=True):
     name: str = Field(max_length=255, unique=True)
     location: str | None = Field(default=None, max_length=255)
     controls_lot: bool = Field(default=True)
+    is_store: bool = Field(default=False, description="Marca si el depósito corresponde a un local")
 
     stock_levels: list["StockLevel"] = Relationship(back_populates="deposit")
 
