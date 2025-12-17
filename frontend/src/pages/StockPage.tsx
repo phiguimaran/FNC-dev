@@ -21,7 +21,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
   createDeposit,
@@ -54,18 +54,21 @@ export function StockPage() {
     tag: SKUTag;
     unit: UnitOfMeasure;
     notes: string;
+    is_active: boolean;
   }>({
     code: "",
     name: "",
     tag: "MP" as SKUTag,
     unit: "kg",
     notes: "",
+    is_active: true,
   });
 
   const [depositForm, setDepositForm] = useState({
     name: "",
     location: "",
     controls_lot: true,
+    is_store: false,
   });
 
   const [movementForm, setMovementForm] = useState<{
@@ -83,6 +86,9 @@ export function StockPage() {
     reference: "",
     lot_code: "",
   });
+
+  const sortedSkus = useMemo(() => (skus ? [...skus].sort((a, b) => a.name.localeCompare(b.name)) : []), [skus]);
+  const sortedDeposits = useMemo(() => (deposits ? [...deposits].sort((a, b) => a.name.localeCompare(b.name)) : []), [deposits]);
 
   useEffect(() => {
     void reloadData();
@@ -119,9 +125,9 @@ export function StockPage() {
   const handleCreateSku = async (event: FormEvent) => {
     event.preventDefault();
     try {
-      await createSku({ ...skuForm, notes: skuForm.notes || null });
+      await createSku({ ...skuForm, notes: skuForm.notes || null, is_active: true });
       setSuccess("SKU creado correctamente");
-      setSkuForm({ code: "", name: "", tag: "MP", unit: "kg", notes: "" });
+      setSkuForm({ code: "", name: "", tag: "MP", unit: "kg", notes: "", is_active: true });
       await reloadData();
     } catch (err) {
       console.error(err);
@@ -136,9 +142,10 @@ export function StockPage() {
         name: depositForm.name,
         location: depositForm.location || null,
         controls_lot: depositForm.controls_lot,
+        is_store: depositForm.is_store,
       });
       setSuccess("Depósito creado correctamente");
-      setDepositForm({ name: "", location: "", controls_lot: true });
+      setDepositForm({ name: "", location: "", controls_lot: true, is_store: false });
       await reloadData();
     } catch (err) {
       console.error(err);
@@ -272,6 +279,10 @@ export function StockPage() {
                   }
                   label="Controla lote"
                 />
+                <FormControlLabel
+                  control={<Switch checked={depositForm.is_store} onChange={(e) => setDepositForm((prev) => ({ ...prev, is_store: e.target.checked }))} />}
+                  label="Es local (destino de pedidos)"
+                />
                 <Button type="submit" variant="contained">
                   Crear depósito
                 </Button>
@@ -293,9 +304,9 @@ export function StockPage() {
                   onChange={(e) => setMovementForm((prev) => ({ ...prev, sku_id: e.target.value }))}
                   helperText={!skus?.length ? "Carga SKUs primero" : undefined}
                 >
-                  {skus?.map((sku) => (
+                  {sortedSkus.map((sku) => (
                     <MenuItem key={sku.id} value={sku.id}>
-                      {sku.code} · {sku.name}
+                      {sku.name} ({sku.code})
                     </MenuItem>
                   ))}
                 </TextField>
@@ -307,7 +318,7 @@ export function StockPage() {
                   onChange={(e) => setMovementForm((prev) => ({ ...prev, deposit_id: e.target.value }))}
                   helperText={!deposits?.length ? "Crea un depósito primero" : undefined}
                 >
-                  {deposits?.map((deposit) => (
+                  {sortedDeposits.map((deposit) => (
                     <MenuItem key={deposit.id} value={deposit.id}>
                       {deposit.name}
                     </MenuItem>

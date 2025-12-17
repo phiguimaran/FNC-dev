@@ -1,6 +1,7 @@
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api";
 
 export type SKUTag = "PT" | "SEMI" | "MP" | "CON";
+export type SKUFamily = "consumible" | "papeleria" | "limpieza";
 export type UnitOfMeasure = "unit" | "kg" | "g" | "l" | "ml" | "pack" | "box" | "m" | "cm";
 
 export type SKU = {
@@ -10,6 +11,8 @@ export type SKU = {
   tag: SKUTag;
   unit: UnitOfMeasure;
   notes?: string | null;
+  family?: SKUFamily | null;
+  is_active: boolean;
 };
 
 export type Deposit = {
@@ -17,6 +20,7 @@ export type Deposit = {
   name: string;
   location?: string | null;
   controls_lot: boolean;
+  is_store: boolean;
 };
 
 export type StockLevel = {
@@ -28,9 +32,18 @@ export type StockLevel = {
   quantity: number;
 };
 
+export type Role = {
+  id: number;
+  name: string;
+  description?: string | null;
+};
+
 export type RecipeItem = {
   component_id: number;
   quantity: number;
+  component_code?: string;
+  component_name?: string;
+  component_unit?: UnitOfMeasure;
 };
 
 export type Recipe = {
@@ -38,6 +51,37 @@ export type Recipe = {
   product_id: number;
   name: string;
   items: RecipeItem[];
+};
+
+export type OrderStatus = "draft" | "submitted" | "approved" | "prepared" | "closed";
+
+export type OrderItem = {
+  id?: number;
+  sku_id: number;
+  sku_code?: string;
+  sku_name?: string;
+  quantity: number;
+  current_stock?: number | null;
+};
+
+export type Order = {
+  id: number;
+  destination: string;
+   destination_deposit_id?: number | null;
+  requested_for?: string | null;
+  status: OrderStatus;
+  notes?: string | null;
+  created_at: string;
+  items: OrderItem[];
+};
+
+export type User = {
+  id: number;
+  email: string;
+  full_name: string;
+  role_id?: number | null;
+  role_name?: string | null;
+  is_active: boolean;
 };
 
 export type MovementType = "production" | "consumption" | "adjustment" | "transfer" | "remito" | "merma";
@@ -72,8 +116,30 @@ export async function fetchHealth(): Promise<{ status: string; version?: string 
   return response.json();
 }
 
-export async function fetchSkus(): Promise<SKU[]> {
-  const response = await fetch(`${API_BASE_URL}/skus`);
+export async function fetchRoles(): Promise<Role[]> {
+  const response = await fetch(`${API_BASE_URL}/roles`);
+  if (!response.ok) {
+    throw new Error("No se pudo obtener los roles");
+  }
+  return response.json();
+}
+
+export async function fetchSkus(params?: { tags?: SKUTag[]; families?: SKUFamily[]; include_inactive?: boolean; search?: string }): Promise<SKU[]> {
+  const query = new URLSearchParams();
+  if (params?.tags?.length) {
+    params.tags.forEach((tag) => query.append("tags", tag));
+  }
+  if (params?.families?.length) {
+    params.families.forEach((family) => query.append("families", family));
+  }
+  if (params?.include_inactive) {
+    query.append("include_inactive", "true");
+  }
+  if (params?.search) {
+    query.append("search", params.search);
+  }
+  const queryString = query.toString();
+  const response = await fetch(`${API_BASE_URL}/skus${queryString ? `?${queryString}` : ""}`);
   if (!response.ok) {
     throw new Error("No se pudo obtener la lista de SKUs");
   }
@@ -117,6 +183,27 @@ export async function createSku(payload: Omit<SKU, "id">): Promise<SKU> {
   return response.json();
 }
 
+export async function updateSku(id: number, payload: Partial<Omit<SKU, "id">>): Promise<SKU> {
+  const response = await fetch(`${API_BASE_URL}/skus/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "No se pudo actualizar el SKU");
+  }
+  return response.json();
+}
+
+export async function deleteSku(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/skus/${id}`, { method: "DELETE" });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "No se pudo eliminar el SKU");
+  }
+}
+
 export async function createDeposit(payload: Omit<Deposit, "id">): Promise<Deposit> {
   const response = await fetch(`${API_BASE_URL}/deposits`, {
     method: "POST",
@@ -128,6 +215,27 @@ export async function createDeposit(payload: Omit<Deposit, "id">): Promise<Depos
     throw new Error(detail || "No se pudo crear el depósito");
   }
   return response.json();
+}
+
+export async function updateDeposit(id: number, payload: Partial<Omit<Deposit, "id">>): Promise<Deposit> {
+  const response = await fetch(`${API_BASE_URL}/deposits/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "No se pudo actualizar el depósito");
+  }
+  return response.json();
+}
+
+export async function deleteDeposit(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/deposits/${id}`, { method: "DELETE" });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "No se pudo eliminar el depósito");
+  }
 }
 
 export async function createStockMovement(payload: {
@@ -172,10 +280,135 @@ export async function createRecipe(payload: Omit<Recipe, "id">): Promise<Recipe>
   return response.json();
 }
 
+export async function updateRecipe(id: number, payload: Omit<Recipe, "id">): Promise<Recipe> {
+  const response = await fetch(`${API_BASE_URL}/recipes/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "No se pudo actualizar la receta");
+  }
+  return response.json();
+}
+
+export async function deleteRecipe(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/recipes/${id}`, { method: "DELETE" });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "No se pudo eliminar la receta");
+  }
+}
+
 export async function fetchStockReport(): Promise<StockReport> {
   const response = await fetch(`${API_BASE_URL}/reports/stock-summary`);
   if (!response.ok) {
     throw new Error("No se pudo obtener el reporte de stock");
   }
   return response.json();
+}
+
+export async function fetchOrders(): Promise<Order[]> {
+  const response = await fetch(`${API_BASE_URL}/orders`);
+  if (!response.ok) {
+    throw new Error("No se pudieron obtener los pedidos");
+  }
+  return response.json();
+}
+
+export async function createOrder(
+  payload: {
+    destination_deposit_id: number;
+    notes?: string | null;
+    items: OrderItem[];
+    requested_for?: string | null;
+  }
+): Promise<Order> {
+  const response = await fetch(`${API_BASE_URL}/orders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "No se pudo crear el pedido");
+  }
+  return response.json();
+}
+
+export async function updateOrder(id: number, payload: Partial<Omit<Order, "id" | "created_at">>): Promise<Order> {
+  const response = await fetch(`${API_BASE_URL}/orders/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "No se pudo actualizar el pedido");
+  }
+  return response.json();
+}
+
+export async function updateOrderStatus(id: number, status: OrderStatus): Promise<Order> {
+  const response = await fetch(`${API_BASE_URL}/orders/${id}/status`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "No se pudo actualizar el estado");
+  }
+  return response.json();
+}
+
+export async function deleteOrder(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/orders/${id}`, { method: "DELETE" });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "No se pudo eliminar el pedido");
+  }
+}
+
+export async function fetchUsers(): Promise<User[]> {
+  const response = await fetch(`${API_BASE_URL}/users`);
+  if (!response.ok) {
+    throw new Error("No se pudieron obtener los usuarios");
+  }
+  return response.json();
+}
+
+export async function createUser(payload: { email: string; full_name: string; password: string; role_id?: number | null; is_active?: boolean }): Promise<User> {
+  const response = await fetch(`${API_BASE_URL}/users`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "No se pudo crear el usuario");
+  }
+  return response.json();
+}
+
+export async function updateUser(id: number, payload: Partial<{ email: string; full_name: string; password: string; role_id?: number | null; is_active?: boolean }>): Promise<User> {
+  const response = await fetch(`${API_BASE_URL}/users/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "No se pudo actualizar el usuario");
+  }
+  return response.json();
+}
+
+export async function deleteUser(id: number): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/users/${id}`, { method: "DELETE" });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "No se pudo eliminar el usuario");
+  }
 }

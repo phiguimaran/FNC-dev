@@ -1,9 +1,12 @@
 from datetime import date
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from sqlmodel import Field, Relationship
 
 from .common import OrderStatus, RemitoStatus, TimestampedModel
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .inventory import Deposit
 
 
 class Order(TimestampedModel, table=True):
@@ -11,11 +14,14 @@ class Order(TimestampedModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     destination: str = Field(max_length=255)
+    destination_deposit_id: int | None = Field(default=None, foreign_key="deposits.id")
     status: OrderStatus = Field(default=OrderStatus.DRAFT)
     requested_for: date | None = None
+    notes: str | None = Field(default=None, max_length=255)
 
     items: list["OrderItem"] = Relationship(back_populates="order")
     remitos: list["Remito"] = Relationship(back_populates="order")
+    destination_deposit: "Deposit" | None = Relationship()
 
 
 class OrderItem(TimestampedModel, table=True):
@@ -25,6 +31,7 @@ class OrderItem(TimestampedModel, table=True):
     order_id: int = Field(foreign_key="orders.id")
     sku_id: int = Field(foreign_key="skus.id")
     quantity: float = Field(gt=0)
+    current_stock: float | None = Field(default=None)
 
     order: Order = Relationship(back_populates="items")
 
