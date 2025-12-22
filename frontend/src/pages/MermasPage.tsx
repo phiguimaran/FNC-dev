@@ -302,6 +302,57 @@ export function MermasPage() {
     [productionLines]
   );
 
+  const typeOptions = useMemo(
+    () =>
+      filteredTypes.map((type) => ({
+        value: type.id,
+        label: type.label,
+        description: `${stageLabel(type.stage)} · ${type.code}`,
+      })),
+    [filteredTypes]
+  );
+
+  const causeOptions = useMemo(
+    () =>
+      filteredCauses.map((cause) => ({
+        value: cause.id,
+        label: cause.label,
+        description: `${stageLabel(cause.stage)} · ${cause.code}`,
+      })),
+    [filteredCauses]
+  );
+
+  const skuOptions = useMemo(
+    () =>
+      filteredSkus.map((sku) => ({
+        value: sku.id,
+        label: `${sku.name} (${sku.code})`,
+        description: `Unidad: ${unitLabel(sku.unit)}`,
+      })),
+    [filteredSkus, units]
+  );
+
+  const depositOptions = useMemo(
+    () =>
+      deposits.map((deposit) => ({
+        value: deposit.id,
+        label: deposit.name,
+        description: deposit.location || undefined,
+      })),
+    [deposits]
+  );
+
+  const productionLineOptions = useMemo(
+    () =>
+      productionLines
+        .filter((line) => line.is_active)
+        .map((line) => ({
+          value: line.id,
+          label: line.name,
+        })),
+    [productionLines]
+  );
+
   const handleEventSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (!eventForm.type_id || !eventForm.cause_id || !eventForm.sku_id || !eventForm.quantity) {
