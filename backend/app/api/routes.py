@@ -1,7 +1,8 @@
 import hashlib
+import uuid
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 
 from ..db import get_session
@@ -18,8 +19,10 @@ from ..models import (
     MermaStage,
     MermaType,
     ProductionLine,
+    ProductionLot,
     SKU,
     SKUType,
+    SemiConversionRule,
     StockLevel,
     StockMovement,
     StockMovementType,
@@ -39,15 +42,16 @@ from ..schemas import (
     SKUCreate,
     SKURead,
     SKUUpdate,
+    StockMovementCreate,
     StockMovementTypeCreate,
     StockMovementTypeRead,
     StockMovementTypeUpdate,
     StockLevelRead,
-    StockMovementCreate,
     StockReportRead,
     StockSummaryRow,
     MovementSummary,
     UnitRead,
+    ProductionLotRead,
     UserCreate,
     UserRead,
     UserUpdate,
@@ -72,6 +76,7 @@ router = APIRouter()
 
 SKU_PRODUCTION_TYPES = {"PT", "SEMI"}
 SKU_CONSUMABLE_CODE = "CON"
+SKU_SEMI_CODE = "SEMI"
 OUTGOING_MOVEMENTS = {"CONSUMPTION", "MERMA", "REMITO"}
 INCOMING_MOVEMENTS = {"PRODUCTION", "PURCHASE", "ADJUSTMENT", "TRANSFER"}
 
@@ -102,10 +107,51 @@ def _get_sku_type_or_404(session: Session, sku_type_id: int) -> SKUType:
     return sku_type
 
 
+def _get_semi_units_per_kg(session: Session, sku_id: int) -> float:
+    rule = session.exec(select(SemiConversionRule).where(SemiConversionRule.sku_id == sku_id)).first()
+    return float(rule.units_per_kg) if rule else 1.0
+
+
+def _generate_lot_code(sku: SKU) -> str:
+    return f"{sku.code}-{datetime.utcnow():%Y%m%d}-{uuid.uuid4().hex[:6].upper()}"
+
+
+def _upsert_semi_conversion_rule(session: Session, sku_id: int, units_per_kg: float) -> None:
+    if units_per_kg <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La conversión de SEMI debe ser mayor a cero")
+    rule = session.exec(select(SemiConversionRule).where(SemiConversionRule.sku_id == sku_id)).first()
+    if rule:
+        rule.units_per_kg = units_per_kg
+        rule.updated_at = datetime.utcnow()
+    else:
+        rule = SemiConversionRule(sku_id=sku_id, units_per_kg=units_per_kg)
+    session.add(rule)
+
+
+def _delete_semi_conversion_rule(session: Session, sku_id: int) -> None:
+    existing = session.exec(select(SemiConversionRule).where(SemiConversionRule.sku_id == sku_id)).first()
+    if existing:
+        session.delete(existing)
+
+
+def _convert_to_base_quantity(sku: SKU, quantity: float, unit: UnitOfMeasure | None, session: Session) -> float:
+    session.refresh(sku, attribute_names=["sku_type"])
+    if sku.sku_type and sku.sku_type.code == SKU_SEMI_CODE:
+        units_per_kg = _get_semi_units_per_kg(session, sku.id)
+        if unit in (None, UnitOfMeasure.KG):
+            return quantity
+        if unit == UnitOfMeasure.UNIT:
+            return quantity / units_per_kg
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unidad no soportada para SEMI")
+    return quantity
+
+
 def _map_sku(sku: SKU, session: Session) -> SKURead:
     session.refresh(sku, attribute_names=["sku_type"])
     type_code = sku.sku_type.code if sku.sku_type else ""
     type_label = sku.sku_type.label if sku.sku_type else ""
+    secondary_unit = UnitOfMeasure.UNIT if type_code == SKU_SEMI_CODE else None
+    units_per_kg = _get_semi_units_per_kg(session, sku.id) if type_code == SKU_SEMI_CODE else None
     return SKURead(
         id=sku.id,
         code=sku.code,
@@ -114,9 +160,31 @@ def _map_sku(sku: SKU, session: Session) -> SKURead:
         sku_type_code=type_code,
         sku_type_label=type_label,
         unit=sku.unit,
+        secondary_unit=secondary_unit,
+        units_per_kg=units_per_kg,
         notes=sku.notes,
         family=sku.family,
         is_active=sku.is_active,
+    )
+
+
+def _map_production_lot(lot: ProductionLot, session: Session) -> ProductionLotRead:
+    session.refresh(lot, attribute_names=["sku", "deposit", "production_line"])
+    return ProductionLotRead(
+        id=lot.id,
+        lot_code=lot.lot_code,
+        sku_id=lot.sku_id,
+        sku_code=lot.sku.code if lot.sku else "",
+        sku_name=lot.sku.name if lot.sku else "",
+        deposit_id=lot.deposit_id,
+        deposit_name=lot.deposit.name if lot.deposit else "",
+        production_line_id=lot.production_line_id,
+        production_line_name=lot.production_line.name if lot.production_line else None,
+        produced_quantity=float(lot.produced_quantity),
+        remaining_quantity=float(lot.remaining_quantity),
+        produced_at=lot.produced_at,
+        is_blocked=lot.is_blocked,
+        notes=lot.notes,
     )
 
 
@@ -381,6 +449,14 @@ def update_merma_type(type_id: int, payload: MermaTypeUpdate, session: Session =
     record = session.get(MermaType, type_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tipo de merma no encontrado")
+
+    new_stage = payload.stage or record.stage
+    duplicate = session.exec(
+        select(MermaType).where(MermaType.stage == new_stage, MermaType.code == record.code, MermaType.id != type_id)
+    ).first()
+    if duplicate:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ya existe un tipo con ese código en la etapa")
+
     update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(record, field, value)
@@ -396,11 +472,11 @@ def delete_merma_type(type_id: int, session: Session = Depends(get_session)) -> 
     record = session.get(MermaType, type_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tipo de merma no encontrado")
-    in_use = session.exec(select(MermaEvent).where(MermaEvent.type_id == type_id)).first()
-    if in_use:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se puede eliminar: está en uso")
-    session.delete(record)
+    record.is_active = False
+    record.updated_at = datetime.utcnow()
+    session.add(record)
     session.commit()
+    session.refresh(record)
 
 
 @router.get("/mermas/causes", tags=["mermas"], response_model=list[MermaCauseRead])
@@ -437,6 +513,14 @@ def update_merma_cause(cause_id: int, payload: MermaCauseUpdate, session: Sessio
     record = session.get(MermaCause, cause_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Causa de merma no encontrada")
+
+    new_stage = payload.stage or record.stage
+    duplicate = session.exec(
+        select(MermaCause).where(MermaCause.stage == new_stage, MermaCause.code == record.code, MermaCause.id != cause_id)
+    ).first()
+    if duplicate:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ya existe una causa con ese código en la etapa")
+
     update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(record, field, value)
@@ -452,11 +536,11 @@ def delete_merma_cause(cause_id: int, session: Session = Depends(get_session)) -
     record = session.get(MermaCause, cause_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Causa de merma no encontrada")
-    in_use = session.exec(select(MermaEvent).where(MermaEvent.cause_id == cause_id)).first()
-    if in_use:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se puede eliminar: está en uso")
-    session.delete(record)
+    record.is_active = False
+    record.updated_at = datetime.utcnow()
+    session.add(record)
     session.commit()
+    session.refresh(record)
 
 
 @router.get("/skus", tags=["sku"], response_model=list[SKURead])
@@ -509,12 +593,18 @@ def create_sku(payload: SKUCreate, session: Session = Depends(get_session)) -> S
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El tipo de SKU está inactivo")
 
     family = payload.family if sku_type.code == SKU_CONSUMABLE_CODE else None
+    units_per_kg = payload.units_per_kg or 1
+    unit = payload.unit
+    if sku_type.code == SKU_SEMI_CODE:
+        unit = UnitOfMeasure.KG
+    if sku_type.code != SKU_SEMI_CODE:
+        units_per_kg = None
 
     sku = SKU(
         code=payload.code,
         name=payload.name,
         sku_type_id=payload.sku_type_id,
-        unit=payload.unit,
+        unit=unit,
         notes=payload.notes,
         family=family,
         is_active=payload.is_active,
@@ -522,6 +612,9 @@ def create_sku(payload: SKUCreate, session: Session = Depends(get_session)) -> S
     session.add(sku)
     session.commit()
     session.refresh(sku)
+    if sku_type.code == SKU_SEMI_CODE:
+        _upsert_semi_conversion_rule(session, sku.id, units_per_kg)
+        session.commit()
     return _map_sku(sku, session)
 
 
@@ -537,6 +630,12 @@ def update_sku(sku_id: int, payload: SKUUpdate, session: Session = Depends(get_s
     if not sku_type.is_active:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El tipo de SKU está inactivo")
 
+    units_per_kg = update_data.pop("units_per_kg", None)
+    if sku_type.code == SKU_SEMI_CODE:
+        update_data["unit"] = UnitOfMeasure.KG
+    if units_per_kg is None and sku_type.code == SKU_SEMI_CODE:
+        units_per_kg = _get_semi_units_per_kg(session, sku_id)
+
     if sku_type.code != SKU_CONSUMABLE_CODE:
         update_data["family"] = None
 
@@ -544,6 +643,12 @@ def update_sku(sku_id: int, payload: SKUUpdate, session: Session = Depends(get_s
         setattr(sku, field, value)
     sku.updated_at = datetime.utcnow()
     session.add(sku)
+    session.commit()
+
+    if sku_type.code == SKU_SEMI_CODE:
+        _upsert_semi_conversion_rule(session, sku.id, units_per_kg or 1)
+    else:
+        _delete_semi_conversion_rule(session, sku.id)
     session.commit()
     session.refresh(sku)
     return _map_sku(sku, session)
@@ -648,7 +753,11 @@ def _map_recipe(recipe: Recipe, session: Session) -> RecipeRead:
         component = session.get(SKU, item.component_id)
         component_code = component.code if component else ""
         component_name = component.name if component else f"SKU {item.component_id}"
-        component_unit = component.unit if component else UnitOfMeasure.UNIT
+        session.refresh(component, attribute_names=["sku_type"]) if component else None
+        if component and component.sku_type and component.sku_type.code == SKU_SEMI_CODE:
+            component_unit = UnitOfMeasure.UNIT
+        else:
+            component_unit = component.unit if component else UnitOfMeasure.UNIT
         items.append(
             {
                 "component_id": item.component_id,
@@ -996,18 +1105,80 @@ def _apply_stock_movement(
     session.refresh(sku, attribute_names=["sku_type"])
     if not (sku.sku_type and sku.sku_type.is_active):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El tipo del SKU está inactivo")
+    production_line = None
+    if payload.production_line_id:
+        production_line = session.get(ProductionLine, payload.production_line_id)
+        if not production_line:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Línea de producción no encontrada")
+        if not production_line.is_active:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La línea de producción está inactiva")
 
-    delta = payload.quantity
+    input_unit = payload.unit or sku.unit
+    base_quantity = _convert_to_base_quantity(sku, payload.quantity, input_unit, session)
+    delta = base_quantity
     movement_code = movement_type.code.upper()
     if movement_code in OUTGOING_MOVEMENTS:
-        delta = -payload.quantity
+        delta = -base_quantity
     elif movement_code not in INCOMING_MOVEMENTS:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de movimiento no soportado")
+
+    lot_code = payload.lot_code
+    production_lot: ProductionLot | None = None
+    created_lot = False
+    if payload.production_lot_id:
+        production_lot = session.get(ProductionLot, payload.production_lot_id)
+        if not production_lot:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lote de producción no encontrado")
+        if production_lot.sku_id != sku.id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El lote no corresponde al SKU indicado")
+        if production_lot.deposit_id != deposit.id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El lote pertenece a otro depósito")
+        if production_lot.is_blocked:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El lote está bloqueado para movimientos")
+        if payload.production_line_id and production_lot.production_line_id not in (None, payload.production_line_id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El lote está asociado a otra línea")
+        lot_code = production_lot.lot_code
+    elif lot_code:
+        production_lot = session.exec(select(ProductionLot).where(ProductionLot.lot_code == lot_code)).first()
+        if production_lot:
+            if production_lot.sku_id != sku.id or production_lot.deposit_id != deposit.id:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El lote pertenece a otro SKU o depósito")
+            if production_lot.is_blocked:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El lote está bloqueado para movimientos")
+            if payload.production_line_id and production_lot.production_line_id not in (None, payload.production_line_id):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El lote está asociado a otra línea")
+
+    if movement_code == "PRODUCTION" and not production_lot:
+        lot_code = lot_code or _generate_lot_code(sku)
+        production_lot = ProductionLot(
+            lot_code=lot_code,
+            sku_id=sku.id,
+            deposit_id=deposit.id,
+            production_line_id=payload.production_line_id,
+            produced_quantity=base_quantity,
+            remaining_quantity=base_quantity,
+            produced_at=payload.movement_date or date.today(),
+        )
+        session.add(production_lot)
+        session.flush()
+        created_lot = True
 
     stock_level = _ensure_stock_level(session, payload.deposit_id, payload.sku_id)
     new_quantity = stock_level.quantity + delta
     if new_quantity < 0 and not allow_negative_balance:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Saldo insuficiente")
+
+    if production_lot:
+        if movement_code == "PRODUCTION" and not created_lot:
+            production_lot.produced_quantity += base_quantity
+            production_lot.remaining_quantity += base_quantity
+        else:
+            new_remaining = production_lot.remaining_quantity + delta
+            if new_remaining < 0:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El lote no tiene saldo suficiente")
+            production_lot.remaining_quantity = new_remaining
+        production_lot.updated_at = datetime.utcnow()
+        session.add(production_lot)
 
     stock_level.quantity = new_quantity
     movement = StockMovement(
@@ -1016,7 +1187,8 @@ def _apply_stock_movement(
         movement_type_id=movement_type.id,
         quantity=delta,
         reference=payload.reference,
-        lot_code=payload.lot_code,
+        lot_code=lot_code,
+        production_lot_id=production_lot.id if production_lot else None,
         movement_date=payload.movement_date or date.today(),
     )
     session.add(stock_level)
@@ -1114,6 +1286,41 @@ def register_stock_movement(payload: StockMovementCreate, session: Session = Dep
     )
 
 
+@router.get("/production/lots", tags=["production"], response_model=list[ProductionLotRead])
+def list_production_lots(
+    deposit_id: int | None = None,
+    sku_id: int | None = None,
+    production_line_id: int | None = None,
+    lot_code: str | None = None,
+    available_only: bool = False,
+    include_blocked: bool = False,
+    session: Session = Depends(get_session),
+) -> list[ProductionLotRead]:
+    statement = select(ProductionLot)
+    if deposit_id:
+        statement = statement.where(ProductionLot.deposit_id == deposit_id)
+    if sku_id:
+        statement = statement.where(ProductionLot.sku_id == sku_id)
+    if production_line_id:
+        statement = statement.where(ProductionLot.production_line_id == production_line_id)
+    if lot_code:
+        statement = statement.where(ProductionLot.lot_code == lot_code)
+    if available_only:
+        statement = statement.where(ProductionLot.remaining_quantity > 0)
+    if not include_blocked:
+        statement = statement.where(ProductionLot.is_blocked.is_(False))
+    lots = session.exec(statement.order_by(ProductionLot.produced_at.desc(), ProductionLot.id.desc())).all()
+    return [_map_production_lot(lot, session) for lot in lots]
+
+
+@router.get("/production/lots/{lot_id}", tags=["production"], response_model=ProductionLotRead)
+def get_production_lot(lot_id: int, session: Session = Depends(get_session)) -> ProductionLotRead:
+    lot = session.get(ProductionLot, lot_id)
+    if not lot:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lote de producción no encontrado")
+    return _map_production_lot(lot, session)
+
+
 @router.post("/mermas", tags=["mermas"], status_code=status.HTTP_201_CREATED, response_model=MermaEventRead)
 def create_merma_event(payload: MermaEventCreate, session: Session = Depends(get_session)) -> MermaEventRead:
     merma_type = session.get(MermaType, payload.type_id)
@@ -1191,6 +1398,7 @@ def create_merma_event(payload: MermaEventCreate, session: Session = Depends(get
             deposit_id=deposit.id,
             movement_type_id=merma_movement_type.id,
             quantity=payload.quantity,
+            unit=unit,
             reference=f"MERMA-{merma_type.code}",
             lot_code=payload.lot_code,
             movement_date=detected_at.date(),

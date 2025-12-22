@@ -4,7 +4,6 @@ from sqlmodel import SQLModel
 
 from .models.common import MermaAction, MermaStage, OrderStatus, SKUFamily, UnitOfMeasure
 
-
 class SKUTypeBase(SQLModel):
     code: str
     label: str
@@ -32,6 +31,7 @@ class SKUBase(SQLModel):
     notes: str | None = None
     family: SKUFamily | None = None
     is_active: bool = True
+    units_per_kg: float | None = None  # Solo aplica a SEMI; base kg
 
 
 class SKUCreate(SKUBase):
@@ -45,12 +45,14 @@ class SKUUpdate(SQLModel):
     notes: str | None = None
     family: SKUFamily | None = None
     is_active: bool | None = None
+    units_per_kg: float | None = None
 
 
 class SKURead(SKUBase):
     id: int
     sku_type_code: str
     sku_type_label: str
+    secondary_unit: UnitOfMeasure | None = None
 
 
 class DepositCreate(SQLModel):
@@ -108,9 +110,32 @@ class StockMovementCreate(SQLModel):
     deposit_id: int
     movement_type_id: int
     quantity: float
+    unit: UnitOfMeasure | None = None
     reference: str | None = None
     lot_code: str | None = None
+    production_lot_id: int | None = None
+    production_line_id: int | None = None
     movement_date: date | None = None
+
+
+class ProductionLotBase(SQLModel):
+    sku_id: int
+    deposit_id: int
+    production_line_id: int | None = None
+    produced_quantity: float
+    remaining_quantity: float
+    lot_code: str
+    produced_at: date
+    is_blocked: bool
+    notes: str | None = None
+
+
+class ProductionLotRead(ProductionLotBase):
+    id: int
+    sku_code: str
+    sku_name: str
+    deposit_name: str
+    production_line_name: str | None = None
 
 
 class StockLevelRead(SQLModel):
@@ -262,6 +287,7 @@ class MermaTypeCreate(MermaTypeBase):
 
 
 class MermaTypeUpdate(SQLModel):
+    stage: MermaStage | None = None
     label: str | None = None
     is_active: bool | None = None
 
@@ -282,6 +308,7 @@ class MermaCauseCreate(MermaCauseBase):
 
 
 class MermaCauseUpdate(SQLModel):
+    stage: MermaStage | None = None
     label: str | None = None
     is_active: bool | None = None
 
