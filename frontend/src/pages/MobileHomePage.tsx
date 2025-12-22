@@ -9,7 +9,6 @@ import {
   CardContent,
   CardHeader,
   Grid,
-  MenuItem,
   Stack,
   TextField,
   Typography,
@@ -17,6 +16,7 @@ import {
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
 
+import { SearchableSelect } from "../components/SearchableSelect";
 import {
   createStockMovement,
   Deposit,
@@ -37,15 +37,15 @@ export function MobileHomePage() {
   const [success, setSuccess] = useState<string | null>(null);
 
   const [productionForm, setProductionForm] = useState({
-    sku_id: "",
-    deposit_id: "",
+    sku_id: null as number | null,
+    deposit_id: null as number | null,
     quantity: "",
     reference: "",
   });
 
   const [mermaForm, setMermaForm] = useState({
-    sku_id: "",
-    deposit_id: "",
+    sku_id: null as number | null,
+    deposit_id: null as number | null,
     quantity: "",
     reference: "Merma/Descarte",
   });
@@ -77,6 +77,25 @@ export function MobileHomePage() {
     [sortedSkus]
   );
   const sortedDeposits = useMemo(() => [...deposits].sort((a, b) => a.name.localeCompare(b.name)), [deposits]);
+  const skuOptions = useMemo(
+    () =>
+      productionSkus.map((sku) => ({
+        value: sku.id,
+        label: `${sku.name} (${sku.code})`,
+      })),
+    [productionSkus]
+  );
+  const depositOptions = useMemo(
+    () =>
+      sortedDeposits.map((deposit) => ({
+        value: deposit.id,
+        label: deposit.name,
+        description: deposit.location || undefined,
+      })),
+    [sortedDeposits]
+  );
+  const selectedProductionSku = productionSkus.find((sku) => sku.id === productionForm.sku_id);
+  const selectedMermaSku = productionSkus.find((sku) => sku.id === mermaForm.sku_id);
 
   const handleMovement = async (
     event: FormEvent,
@@ -94,12 +113,16 @@ export function MobileHomePage() {
       setError("Configura los tipos de movimiento antes de registrar");
       return;
     }
+    const sku = skus.find((s) => s.id === Number(formState.sku_id));
+    const isSemi = sku?.sku_type_code === "SEMI";
+    const unit = isSemi ? (movementTypeCode === "CONSUMPTION" ? "unit" : "kg") : sku?.unit;
     try {
       await createStockMovement({
         sku_id: Number(formState.sku_id),
         deposit_id: Number(formState.deposit_id),
         quantity: Number(formState.quantity),
         movement_type_id: movementType.id,
+        unit: unit,
         reference: formState.reference || undefined,
       });
       setSuccess("Registrado correctamente");
@@ -127,40 +150,39 @@ export function MobileHomePage() {
       <Card sx={{ borderRadius: 3 }}>
         <CardHeader
           titleTypographyProps={{ sx: { fontSize: 20, fontWeight: 700 } }}
-        title="Registrar producción"
-        subheader="Solo PT / SEMI / MP"
-        avatar={<ProductionIcon color="primary" />}
-      />
-      <CardContent>
-        <Stack component="form" spacing={2} onSubmit={(e) => handleMovement(e, "PRODUCTION", productionForm, () => setProductionForm({ sku_id: "", deposit_id: "", quantity: "", reference: "" }))}>
-            <TextField
-              select
-              required
+          title="Registrar producción"
+          subheader="Solo PT / SEMI / MP"
+          avatar={<ProductionIcon color="primary" />}
+        />
+        <CardContent>
+          <Stack
+            component="form"
+            spacing={2}
+            onSubmit={(e) =>
+              handleMovement(e, "PRODUCTION", productionForm, () => setProductionForm({ sku_id: null, deposit_id: null, quantity: "", reference: "" }))
+            }
+            >
+            <SearchableSelect
               label="SKU producido"
-              value={productionForm.sku_id}
-              onChange={(e) => setProductionForm((prev) => ({ ...prev, sku_id: e.target.value }))}
-              InputLabelProps={{ sx: { fontSize: 16 } }}
-            >
-              {productionSkus.map((sku) => (
-                <MenuItem key={sku.id} value={sku.id} sx={{ fontSize: 16 }}>
-                  {sku.name} ({sku.code})
-                </MenuItem>
-              ))}
-            </TextField>
-            <TextField
-              select
               required
+              options={skuOptions}
+              value={productionForm.sku_id}
+              onChange={(value) => setProductionForm((prev) => ({ ...prev, sku_id: value }))}
+              textFieldProps={{ InputLabelProps: { sx: { fontSize: 16 } } }}
+            />
+            {selectedProductionSku?.sku_type_code === "SEMI" && (
+              <Typography variant="caption" color="text.secondary">
+                SEMI en kg (base). Equivalencia: {selectedProductionSku.units_per_kg ?? 1} un = 1 kg
+              </Typography>
+            )}
+            <SearchableSelect
               label="Depósito"
+              required
+              options={depositOptions}
               value={productionForm.deposit_id}
-              onChange={(e) => setProductionForm((prev) => ({ ...prev, deposit_id: e.target.value }))}
-              InputLabelProps={{ sx: { fontSize: 16 } }}
-            >
-              {sortedDeposits.map((deposit) => (
-                <MenuItem key={deposit.id} value={deposit.id} sx={{ fontSize: 16 }}>
-                  {deposit.name}
-                </MenuItem>
-              ))}
-            </TextField>
+              onChange={(value) => setProductionForm((prev) => ({ ...prev, deposit_id: value }))}
+              textFieldProps={{ InputLabelProps: { sx: { fontSize: 16 } } }}
+            />
             <TextField
               required
               label="Cantidad"
@@ -192,37 +214,30 @@ export function MobileHomePage() {
             component="form"
             spacing={2}
             onSubmit={(e) =>
-              handleMovement(e, "MERMA", mermaForm, () => setMermaForm({ sku_id: "", deposit_id: "", quantity: "", reference: "Merma/Descarte" }))
+              handleMovement(e, "MERMA", mermaForm, () => setMermaForm({ sku_id: null, deposit_id: null, quantity: "", reference: "Merma/Descarte" }))
             }
           >
-            <TextField
-              select
-              required
+            <SearchableSelect
               label="SKU"
-              value={mermaForm.sku_id}
-              onChange={(e) => setMermaForm((prev) => ({ ...prev, sku_id: e.target.value }))}
-              InputLabelProps={{ sx: { fontSize: 16 } }}
-            >
-              {productionSkus.map((sku) => (
-                <MenuItem key={sku.id} value={sku.id} sx={{ fontSize: 16 }}>
-                  {sku.name} ({sku.code})
-                </MenuItem>
-              ))}
-            </TextField>
-            <TextField
-              select
               required
+              options={skuOptions}
+              value={mermaForm.sku_id}
+              onChange={(value) => setMermaForm((prev) => ({ ...prev, sku_id: value }))}
+              textFieldProps={{ InputLabelProps: { sx: { fontSize: 16 } } }}
+            />
+            {selectedMermaSku?.sku_type_code === "SEMI" && (
+              <Typography variant="caption" color="text.secondary">
+                SEMI en kg (base). Equivalencia: {selectedMermaSku.units_per_kg ?? 1} un = 1 kg
+              </Typography>
+            )}
+            <SearchableSelect
               label="Depósito"
+              required
+              options={depositOptions}
               value={mermaForm.deposit_id}
-              onChange={(e) => setMermaForm((prev) => ({ ...prev, deposit_id: e.target.value }))}
-              InputLabelProps={{ sx: { fontSize: 16 } }}
-            >
-              {sortedDeposits.map((deposit) => (
-                <MenuItem key={deposit.id} value={deposit.id} sx={{ fontSize: 16 }}>
-                  {deposit.name}
-                </MenuItem>
-              ))}
-            </TextField>
+              onChange={(value) => setMermaForm((prev) => ({ ...prev, deposit_id: value }))}
+              textFieldProps={{ InputLabelProps: { sx: { fontSize: 16 } } }}
+            />
             <TextField
               required
               label="Cantidad a descontar"
