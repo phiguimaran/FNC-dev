@@ -2,7 +2,7 @@ import hashlib
 import uuid
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import Session, select
 
 from ..db import get_session
