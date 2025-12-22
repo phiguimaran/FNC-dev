@@ -487,12 +487,12 @@ def list_skus(
     return [_map_sku(item, session) for item in skus]
 
 
-@router.get("/skus/{sku_id}", tags=["sku"], response_model=SKURead)
-def get_sku(sku_id: int, session: Session = Depends(get_session)) -> SKURead:
-    sku = session.get(SKU, sku_id)
-    if not sku:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="SKU no encontrado")
-    return _map_sku(sku, session)
+@router.get("/skus", tags=["sku"], response_model=list[SKURead])
+def list_skus(session: Session = Depends(get_session)) -> list[SKURead]:
+    skus = session.exec(
+        select(SKU).where(SKU.active == True)
+    ).all()
+    return [_map_sku(s, session) for s in skus]
 
 
 @router.post("/skus", tags=["sku"], status_code=status.HTTP_201_CREATED, response_model=SKURead)

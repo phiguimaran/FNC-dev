@@ -38,7 +38,7 @@ import {
   StockMovementType,
 } from "../lib/api";
 
-const PRODUCTION_TYPE_CODES: string[] = ["PT", "SEMI"];
+const PRODUCTION_TYPE_CODES: string[] = ["PT", "SEMI", "MP"];
 
 export function ProductionPage() {
   const [skus, setSkus] = useState<SKU[]>([]);
