@@ -7,6 +7,7 @@ from .common import SKUFamily, TimestampedModel, UnitOfMeasure
 
 if TYPE_CHECKING:  # pragma: no cover
     from .inventory import StockLevel
+    from .inventory import ProductionLot
     from .merma import MermaEvent
 
 
@@ -41,6 +42,7 @@ class SKU(TimestampedModel, table=True):
     semi_conversion_rule: Optional["SemiConversionRule"] = Relationship(
         back_populates="sku", sa_relationship_kwargs={"uselist": False}
     )
+    production_lots: list["ProductionLot"] = Relationship(back_populates="sku")
 
 
 class Recipe(TimestampedModel, table=True):

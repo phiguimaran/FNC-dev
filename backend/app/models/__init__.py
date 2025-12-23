@@ -1,5 +1,5 @@
 from .common import MermaAction, MermaStage, OrderStatus, RemitoStatus, SKUFamily, UnitOfMeasure
-from .inventory import Deposit, StockLevel, StockMovement, StockMovementType
+from .inventory import Deposit, ProductionLot, StockLevel, StockMovement, StockMovementType
 from .order import Order, OrderItem, Remito, RemitoItem
 from .sku import Recipe, RecipeItem, SKU, SKUType, SemiConversionRule
 from .merma import MermaCause, MermaEvent, MermaType, ProductionLine
@@ -14,6 +14,7 @@ __all__ = [
     "UnitOfMeasure",
     "SKUType",
     "Deposit",
+    "ProductionLot",
     "StockLevel",
     "StockMovement",
     "StockMovementType",

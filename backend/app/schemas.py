@@ -4,7 +4,6 @@ from sqlmodel import SQLModel
 
 from .models.common import MermaAction, MermaStage, OrderStatus, SKUFamily, UnitOfMeasure
 
-
 class SKUTypeBase(SQLModel):
     code: str
     label: str
@@ -114,7 +113,29 @@ class StockMovementCreate(SQLModel):
     unit: UnitOfMeasure | None = None
     reference: str | None = None
     lot_code: str | None = None
+    production_lot_id: int | None = None
+    production_line_id: int | None = None
     movement_date: date | None = None
+
+
+class ProductionLotBase(SQLModel):
+    sku_id: int
+    deposit_id: int
+    production_line_id: int | None = None
+    produced_quantity: float
+    remaining_quantity: float
+    lot_code: str
+    produced_at: date
+    is_blocked: bool
+    notes: str | None = None
+
+
+class ProductionLotRead(ProductionLotBase):
+    id: int
+    sku_code: str
+    sku_name: str
+    deposit_name: str
+    production_line_name: str | None = None
 
 
 class StockLevelRead(SQLModel):
