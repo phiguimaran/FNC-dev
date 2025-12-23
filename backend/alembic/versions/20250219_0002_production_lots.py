@@ -1,7 +1,7 @@
 """add production lots and link stock movements
 
 Revision ID: 20250219_0002
-Revises: 20250219_0001_semi_conversion_rules
+Revises: 20250219_0001
 Create Date: 2025-02-19 00:02:00.000000
 """
 
@@ -13,7 +13,7 @@ from sqlalchemy.sql import func
 
 # revision identifiers, used by Alembic.
 revision: str = "20250219_0002"
-down_revision: Union[str, None] = "20250219_0001_semi_conversion_rules"
+down_revision: Union[str, None] = "20250219_0001"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
