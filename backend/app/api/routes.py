@@ -1479,7 +1479,10 @@ def list_stock_movements(
 
     safe_limit = max(1, min(limit, 200))
     safe_offset = max(offset, 0)
-    total = session.exec(select(func.count()).select_from(statement.subquery())).scalar_one()
+    total = session.exec(
+        select(func.count()).select_from(statement.subquery())
+    ).one()[0]
+
     records = session.exec(
         statement.order_by(StockMovement.movement_date.desc(), StockMovement.id.desc())
         .offset(safe_offset)
