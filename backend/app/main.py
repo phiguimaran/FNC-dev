@@ -12,13 +12,15 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name)
 
     app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+      CORSMiddleware,
+      allow_origins=[
+        "http://localhost:5173",
+        "http://192.168.1.15:5173",
+      ],
+      allow_credentials=True,
+      allow_methods=["*"],
+      allow_headers=["*"],
     )
-
     init_db()
     app.include_router(api_router, prefix=settings.api_prefix)
     return app

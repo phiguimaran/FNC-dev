@@ -46,6 +46,11 @@ def is_legacy_hash(hashed_password: str) -> bool:
 def create_access_token(data: dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
     settings = get_settings()
     to_encode = data.copy()
+
+    # Asegurar que "sub" sea string (requisito de python-jose)
+    if "sub" in to_encode and not isinstance(to_encode["sub"], str):
+        to_encode["sub"] = str(to_encode["sub"])
+
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.jwt_expires_minutes))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
