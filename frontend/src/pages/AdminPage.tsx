@@ -3,6 +3,7 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
 import InventoryIcon from "@mui/icons-material/Inventory2";
 import LibraryAddIcon from "@mui/icons-material/LibraryAdd";
+import PeopleIcon from "@mui/icons-material/People";
 import RestaurantMenuIcon from "@mui/icons-material/RestaurantMenu";
 import StoreIcon from "@mui/icons-material/Store";
 import {
@@ -40,18 +41,26 @@ import {
   createUser,
   createMermaCause,
   createMermaType,
+  createClient,
+  createClientRepresentative,
   deleteDeposit,
   deleteMermaCause,
   deleteMermaType,
+  deleteClient,
+  deleteClientRepresentative,
   deleteRecipe,
   deleteSku,
   deleteUser,
   Deposit,
+  Client,
+  ClientRepresentative,
   fetchDeposits,
   fetchRecipes,
   fetchRoles,
   fetchMermaCauses,
   fetchMermaTypes,
+  fetchClients,
+  fetchClientRepresentatives,
   fetchSkuTypes,
   fetchStockMovementTypes,
   fetchSkus,
@@ -76,6 +85,8 @@ import {
   updateDeposit,
   updateMermaCause,
   updateMermaType,
+  updateClient,
+  updateClientRepresentative,
   updateRecipe,
   updateSku,
   updateUser,
@@ -92,10 +103,22 @@ const MERMA_STAGE_OPTIONS: { value: MermaStage; label: string }[] = [
   { value: "administrativa", label: "Administrativa" },
 ];
 const mermaStageLabel = (stage: MermaStage) => MERMA_STAGE_OPTIONS.find((s) => s.value === stage)?.label ?? stage;
+const CLIENT_TYPE_OPTIONS = [
+  { value: "empresa", label: "Empresa" },
+  { value: "particular", label: "Particular" },
+];
+const PERSON_TYPE_OPTIONS = [
+  { value: "fisica", label: "Persona física" },
+  { value: "juridica", label: "Persona jurídica" },
+];
+const DOCUMENT_TYPE_OPTIONS = [
+  { value: "DNI", label: "DNI" },
+  { value: "Pasaporte", label: "Pasaporte" },
+];
 
 type RecipeFormItem = { component_id: string; quantity: string };
 
-type TabKey = "productos" | "recetas" | "depositos" | "usuarios" | "catalogos";
+type TabKey = "productos" | "recetas" | "depositos" | "usuarios" | "clientes" | "catalogos";
 
 export function AdminPage() {
   const [tab, setTab] = useState<TabKey>("productos");
@@ -108,6 +131,8 @@ export function AdminPage() {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [clientRepresentatives, setClientRepresentatives] = useState<ClientRepresentative[]>([]);
   const [units, setUnits] = useState<UnitOption[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -116,6 +141,9 @@ export function AdminPage() {
   const [depositSearch, setDepositSearch] = useState("");
   const [userSearch, setUserSearch] = useState("");
   const [showInactiveSkus, setShowInactiveSkus] = useState(false);
+  const [clientSearch, setClientSearch] = useState("");
+  const [showInactiveClients, setShowInactiveClients] = useState(false);
+  const [selectedClientId, setSelectedClientId] = useState<number | "">("");
 
   const [skuForm, setSkuForm] = useState<{ id?: number; code: string; name: string; sku_type_id: number | ""; unit: UnitOfMeasure; units_per_kg?: number | ""; notes: string; family: SKUFamily | ""; is_active: boolean }>(
     {
@@ -153,6 +181,37 @@ export function AdminPage() {
       is_active: true,
     }
   );
+  const [clientForm, setClientForm] = useState<{ id?: number; name: string; client_type: string; is_active: boolean }>(
+    {
+      name: "",
+      client_type: "empresa",
+      is_active: true,
+    }
+  );
+  const [representativeForm, setRepresentativeForm] = useState<{
+    id?: number;
+    full_name: string;
+    person_type: string;
+    document_type: string;
+    document_number: string;
+    email: string;
+    phone: string;
+    address: string;
+    notes: string;
+    is_active: boolean;
+  }>(
+    {
+      full_name: "",
+      person_type: "fisica",
+      document_type: "DNI",
+      document_number: "",
+      email: "",
+      phone: "",
+      address: "",
+      notes: "",
+      is_active: true,
+    }
+  );
   const [skuTypeForm, setSkuTypeForm] = useState<{ id?: number; code: string; label: string; is_active: boolean }>({
     code: "",
     label: "",
@@ -180,8 +239,17 @@ export function AdminPage() {
     void loadData();
   }, []);
 
+  useEffect(() => {
+    if (!selectedClientId) {
+      setClientRepresentatives([]);
+      return;
+    }
+    void loadClientRepresentatives(Number(selectedClientId));
+  }, [selectedClientId]);
+
   const sortedSkus = useMemo(() => [...skus].sort((a, b) => a.name.localeCompare(b.name)), [skus]);
   const sortedDeposits = useMemo(() => [...deposits].sort((a, b) => a.name.localeCompare(b.name)), [deposits]);
+  const sortedClients = useMemo(() => [...clients].sort((a, b) => a.name.localeCompare(b.name)), [clients]);
   const skuMap = useMemo(() => new Map(skus.map((sku) => [sku.id, sku])), [skus]);
   const skuTypeMap = useMemo(() => new Map(skuTypes.map((type) => [type.id, type])), [skuTypes]);
   const sortedSkuTypes = useMemo(() => [...skuTypes].sort((a, b) => a.code.localeCompare(b.code)), [skuTypes]);
@@ -231,12 +299,37 @@ export function AdminPage() {
       ),
     [users, userSearch]
   );
+  const filteredClients = useMemo(
+    () =>
+      sortedClients.filter(
+        (client) =>
+          (showInactiveClients || client.is_active) &&
+          (!clientSearch || matchesSearch(`${client.name} ${client.client_type}`, clientSearch))
+      ),
+    [sortedClients, showInactiveClients, clientSearch]
+  );
+  const selectedClient = useMemo(
+    () => clients.find((client) => client.id === Number(selectedClientId)),
+    [clients, selectedClientId]
+  );
   const selectedSkuType = skuForm.sku_type_id ? skuTypeMap.get(Number(skuForm.sku_type_id)) : undefined;
   const isSemiSku = selectedSkuType?.code === "SEMI";
 
   const loadData = async () => {
     try {
-      const [skuList, depositList, recipeList, roleList, userList, unitList, skuTypeList, movementTypeList, mermaTypeList, mermaCauseList] = await Promise.all([
+      const [
+        skuList,
+        depositList,
+        recipeList,
+        roleList,
+        userList,
+        unitList,
+        skuTypeList,
+        movementTypeList,
+        mermaTypeList,
+        mermaCauseList,
+        clientList,
+      ] = await Promise.all([
         fetchSkus({ include_inactive: true }),
         fetchDeposits(),
         fetchRecipes(),
@@ -247,6 +340,7 @@ export function AdminPage() {
         fetchStockMovementTypes({ include_inactive: true }),
         fetchMermaTypes({ include_inactive: true }),
         fetchMermaCauses({ include_inactive: true }),
+        fetchClients({ include_inactive: true }),
       ]);
       setSkus(skuList);
       setDeposits(depositList);
@@ -258,15 +352,31 @@ export function AdminPage() {
       setMovementTypes(movementTypeList);
       setMermaTypes(mermaTypeList);
       setMermaCauses(mermaCauseList);
+      setClients(clientList);
 
       const defaultSkuType = skuTypeList.find((t) => t.code === "MP" && t.is_active) ?? skuTypeList.find((t) => t.is_active);
       if (defaultSkuType && !skuForm.sku_type_id) {
         setSkuForm((prev) => ({ ...prev, sku_type_id: defaultSkuType.id }));
       }
+      if (!selectedClientId && clientList.length) {
+        const activeClient = clientList.find((client) => client.is_active) ?? clientList[0];
+        setSelectedClientId(activeClient?.id ?? "");
+      }
       setError(null);
     } catch (err) {
       console.error(err);
       setError("No pudimos cargar los catálogos. ¿Está levantado el backend?");
+    }
+  };
+
+  const loadClientRepresentatives = async (clientId: number) => {
+    try {
+      const reps = await fetchClientRepresentatives(clientId, { include_inactive: true });
+      setClientRepresentatives(reps);
+      setError(null);
+    } catch (err) {
+      console.error(err);
+      setError("No pudimos cargar los apoderados");
     }
   };
 
@@ -400,6 +510,84 @@ export function AdminPage() {
     }
   };
 
+  const handleClientSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    try {
+      if (!clientForm.name || !clientForm.client_type) {
+        setError("Completa nombre y tipo de cliente");
+        return;
+      }
+      if (clientForm.id) {
+        await updateClient(clientForm.id, {
+          name: clientForm.name,
+          client_type: clientForm.client_type,
+          is_active: clientForm.is_active,
+        });
+        setSuccess("Cliente actualizado");
+      } else {
+        await createClient({
+          name: clientForm.name,
+          client_type: clientForm.client_type,
+          is_active: clientForm.is_active,
+        });
+        setSuccess("Cliente creado");
+      }
+      setClientForm({ id: undefined, name: "", client_type: "empresa", is_active: true });
+      await loadData();
+    } catch (err) {
+      console.error(err);
+      setError("No pudimos guardar el cliente");
+    }
+  };
+
+  const handleRepresentativeSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    try {
+      if (!selectedClientId) {
+        setError("Selecciona un cliente");
+        return;
+      }
+      if (!representativeForm.full_name || !representativeForm.document_number) {
+        setError("Completa nombre y documento");
+        return;
+      }
+      const payload = {
+        full_name: representativeForm.full_name,
+        person_type: representativeForm.person_type,
+        document_type: representativeForm.document_type,
+        document_number: representativeForm.document_number,
+        email: representativeForm.email || null,
+        phone: representativeForm.phone || null,
+        address: representativeForm.address || null,
+        notes: representativeForm.notes || null,
+        is_active: representativeForm.is_active,
+      };
+      if (representativeForm.id) {
+        await updateClientRepresentative(Number(selectedClientId), representativeForm.id, payload);
+        setSuccess("Apoderado actualizado");
+      } else {
+        await createClientRepresentative(Number(selectedClientId), payload);
+        setSuccess("Apoderado creado");
+      }
+      setRepresentativeForm({
+        id: undefined,
+        full_name: "",
+        person_type: "fisica",
+        document_type: "DNI",
+        document_number: "",
+        email: "",
+        phone: "",
+        address: "",
+        notes: "",
+        is_active: true,
+      });
+      await loadClientRepresentatives(Number(selectedClientId));
+    } catch (err) {
+      console.error(err);
+      setError("No pudimos guardar el apoderado");
+    }
+  };
+
   const handleRecipeItemChange = (index: number, field: keyof RecipeFormItem, value: string) => {
     setRecipeForm((prev) => {
       const items = [...prev.items];
@@ -451,6 +639,26 @@ export function AdminPage() {
       role_id: user.role_id ? String(user.role_id) : "",
       is_active: user.is_active,
     });
+  const startEditClient = (client: Client) =>
+    setClientForm({
+      id: client.id,
+      name: client.name,
+      client_type: client.client_type,
+      is_active: client.is_active,
+    });
+  const startEditRepresentative = (representative: ClientRepresentative) =>
+    setRepresentativeForm({
+      id: representative.id,
+      full_name: representative.full_name,
+      person_type: representative.person_type,
+      document_type: representative.document_type,
+      document_number: representative.document_number,
+      email: representative.email ?? "",
+      phone: representative.phone ?? "",
+      address: representative.address ?? "",
+      notes: representative.notes ?? "",
+      is_active: representative.is_active,
+    });
 
   const skuLabel = (sku: SKU) => `${sku.name} (${sku.code})`;
   const unitLabel = (unitCode?: UnitOfMeasure) => units.find((u) => u.code === unitCode)?.label || unitCode || "";
@@ -463,15 +671,30 @@ export function AdminPage() {
 
   const filteredProducts = recipeComponents;
 
-  const handleDelete = async (type: "sku" | "deposit" | "recipe" | "user", id: number) => {
+  const handleDelete = async (
+    type: "sku" | "deposit" | "recipe" | "user" | "client" | "representative",
+    id: number,
+    parentId?: number
+  ) => {
     if (!window.confirm("¿Eliminar el registro?")) return;
     try {
       if (type === "sku") await deleteSku(id);
       if (type === "deposit") await deleteDeposit(id);
       if (type === "recipe") await deleteRecipe(id);
       if (type === "user") await deleteUser(id);
+      if (type === "client") await deleteClient(id);
+      if (type === "representative") {
+        if (!parentId) {
+          setError("Selecciona un cliente antes de eliminar un apoderado");
+          return;
+        }
+        await deleteClientRepresentative(parentId, id);
+      }
       setSuccess("Registro eliminado");
       await loadData();
+      if (type === "representative" && parentId) {
+        await loadClientRepresentatives(parentId);
+      }
     } catch (err) {
       console.error(err);
       setError("No pudimos eliminar el registro");
@@ -1520,6 +1743,316 @@ export function AdminPage() {
     </Grid>
   );
 
+  const renderClientes = () => (
+    <Grid container spacing={3}>
+      <Grid item xs={12} md={5}>
+        <Card>
+          <CardHeader title={clientForm.id ? "Editar cliente" : "Nuevo cliente"} avatar={<PeopleIcon color="primary" />} />
+          <Divider />
+          <CardContent>
+            <Stack component="form" spacing={2} onSubmit={handleClientSubmit}>
+              <TextField
+                label="Nombre"
+                value={clientForm.name}
+                onChange={(event) => setClientForm((prev) => ({ ...prev, name: event.target.value }))}
+                required
+              />
+              <TextField
+                select
+                label="Tipo de cliente"
+                value={clientForm.client_type}
+                onChange={(event) => setClientForm((prev) => ({ ...prev, client_type: event.target.value }))}
+                required
+              >
+                {CLIENT_TYPE_OPTIONS.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={clientForm.is_active}
+                    onChange={(event) => setClientForm((prev) => ({ ...prev, is_active: event.target.checked }))}
+                  />
+                }
+                label="Cliente activo"
+              />
+              <Stack direction="row" spacing={1}>
+                <Button type="submit" variant="contained">
+                  {clientForm.id ? "Guardar cambios" : "Crear cliente"}
+                </Button>
+                {clientForm.id && (
+                  <Button onClick={() => setClientForm({ id: undefined, name: "", client_type: "empresa", is_active: true })}>
+                    Cancelar
+                  </Button>
+                )}
+              </Stack>
+            </Stack>
+          </CardContent>
+        </Card>
+        <Card sx={{ mt: 3 }}>
+          <CardHeader title="Clientes" action={<Chip label={`${filteredClients.length} de ${clients.length}`} />} />
+          <Divider />
+          <CardContent>
+            <Stack spacing={2}>
+              <TextField
+                label="Buscar"
+                value={clientSearch}
+                onChange={(event) => setClientSearch(event.target.value)}
+                size="small"
+                placeholder="Nombre o tipo"
+                sx={{ maxWidth: 320 }}
+              />
+              <FormControlLabel
+                control={
+                  <Switch checked={showInactiveClients} onChange={(event) => setShowInactiveClients(event.target.checked)} />
+                }
+                label="Mostrar inactivos"
+              />
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Cliente</TableCell>
+                    <TableCell>Tipo</TableCell>
+                    <TableCell>Estado</TableCell>
+                    <TableCell align="right">Acciones</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {filteredClients.map((client) => (
+                    <TableRow
+                      key={client.id}
+                      hover
+                      selected={selectedClientId === client.id}
+                      onClick={() => setSelectedClientId(client.id)}
+                      sx={{ cursor: "pointer" }}
+                    >
+                      <TableCell>{client.name}</TableCell>
+                      <TableCell>
+                        {CLIENT_TYPE_OPTIONS.find((option) => option.value === client.client_type)?.label ?? client.client_type}
+                      </TableCell>
+                      <TableCell>{client.is_active ? "Activo" : "Inactivo"}</TableCell>
+                      <TableCell align="right">
+                        <Tooltip title="Editar">
+                          <IconButton size="small" onClick={() => startEditClient(client)}>
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Eliminar">
+                          <IconButton size="small" color="error" onClick={() => handleDelete("client", client.id)}>
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Stack>
+          </CardContent>
+        </Card>
+      </Grid>
+      <Grid item xs={12} md={7}>
+        <Card>
+          <CardHeader title="Apoderados" subheader={selectedClient ? `Cliente: ${selectedClient.name}` : "Selecciona un cliente"} />
+          <Divider />
+          <CardContent>
+            <Stack spacing={2}>
+              <TextField
+                select
+                label="Cliente"
+                value={selectedClientId}
+                onChange={(event) => {
+                  setSelectedClientId(event.target.value ? Number(event.target.value) : "");
+                  setRepresentativeForm({
+                    id: undefined,
+                    full_name: "",
+                    person_type: "fisica",
+                    document_type: "DNI",
+                    document_number: "",
+                    email: "",
+                    phone: "",
+                    address: "",
+                    notes: "",
+                    is_active: true,
+                  });
+                }}
+              >
+                {clients.map((client) => (
+                  <MenuItem key={client.id} value={client.id}>
+                    {client.name}
+                  </MenuItem>
+                ))}
+              </TextField>
+              <Stack component="form" spacing={2} onSubmit={handleRepresentativeSubmit}>
+                <TextField
+                  label="Nombre completo"
+                  value={representativeForm.full_name}
+                  onChange={(event) => setRepresentativeForm((prev) => ({ ...prev, full_name: event.target.value }))}
+                  required
+                />
+                <Grid container spacing={2}>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      select
+                      label="Tipo de persona"
+                      value={representativeForm.person_type}
+                      onChange={(event) => setRepresentativeForm((prev) => ({ ...prev, person_type: event.target.value }))}
+                      required
+                      fullWidth
+                    >
+                      {PERSON_TYPE_OPTIONS.map((option) => (
+                        <MenuItem key={option.value} value={option.value}>
+                          {option.label}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      select
+                      label="Documento"
+                      value={representativeForm.document_type}
+                      onChange={(event) => setRepresentativeForm((prev) => ({ ...prev, document_type: event.target.value }))}
+                      required
+                      fullWidth
+                    >
+                      {DOCUMENT_TYPE_OPTIONS.map((option) => (
+                        <MenuItem key={option.value} value={option.value}>
+                          {option.label}
+                        </MenuItem>
+                      ))}
+                    </TextField>
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      label="Número"
+                      value={representativeForm.document_number}
+                      onChange={(event) => setRepresentativeForm((prev) => ({ ...prev, document_number: event.target.value }))}
+                      required
+                      fullWidth
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      label="Email"
+                      value={representativeForm.email}
+                      onChange={(event) => setRepresentativeForm((prev) => ({ ...prev, email: event.target.value }))}
+                      fullWidth
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      label="Teléfono"
+                      value={representativeForm.phone}
+                      onChange={(event) => setRepresentativeForm((prev) => ({ ...prev, phone: event.target.value }))}
+                      fullWidth
+                    />
+                  </Grid>
+                  <Grid item xs={12} sm={6}>
+                    <TextField
+                      label="Dirección"
+                      value={representativeForm.address}
+                      onChange={(event) => setRepresentativeForm((prev) => ({ ...prev, address: event.target.value }))}
+                      fullWidth
+                    />
+                  </Grid>
+                  <Grid item xs={12}>
+                    <TextField
+                      label="Notas"
+                      value={representativeForm.notes}
+                      onChange={(event) => setRepresentativeForm((prev) => ({ ...prev, notes: event.target.value }))}
+                      fullWidth
+                    />
+                  </Grid>
+                </Grid>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={representativeForm.is_active}
+                      onChange={(event) => setRepresentativeForm((prev) => ({ ...prev, is_active: event.target.checked }))}
+                    />
+                  }
+                  label="Apoderado activo"
+                />
+                <Stack direction="row" spacing={1}>
+                  <Button type="submit" variant="contained" disabled={!selectedClientId}>
+                    {representativeForm.id ? "Guardar cambios" : "Agregar apoderado"}
+                  </Button>
+                  {representativeForm.id && (
+                    <Button
+                      onClick={() =>
+                        setRepresentativeForm({
+                          id: undefined,
+                          full_name: "",
+                          person_type: "fisica",
+                          document_type: "DNI",
+                          document_number: "",
+                          email: "",
+                          phone: "",
+                          address: "",
+                          notes: "",
+                          is_active: true,
+                        })
+                      }
+                    >
+                      Cancelar
+                    </Button>
+                  )}
+                </Stack>
+              </Stack>
+              <Divider />
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Apoderado</TableCell>
+                    <TableCell>Tipo</TableCell>
+                    <TableCell>Documento</TableCell>
+                    <TableCell>Estado</TableCell>
+                    <TableCell align="right">Acciones</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {clientRepresentatives.map((representative) => (
+                    <TableRow key={representative.id} hover>
+                      <TableCell>{representative.full_name}</TableCell>
+                      <TableCell>
+                        {PERSON_TYPE_OPTIONS.find((option) => option.value === representative.person_type)?.label ??
+                          representative.person_type}
+                      </TableCell>
+                      <TableCell>
+                        {representative.document_type} {representative.document_number}
+                      </TableCell>
+                      <TableCell>{representative.is_active ? "Activo" : "Inactivo"}</TableCell>
+                      <TableCell align="right">
+                        <Tooltip title="Editar">
+                          <IconButton size="small" onClick={() => startEditRepresentative(representative)}>
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Eliminar">
+                          <IconButton
+                            size="small"
+                            color="error"
+                            onClick={() => handleDelete("representative", representative.id, representative.client_id)}
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </Stack>
+          </CardContent>
+        </Card>
+      </Grid>
+    </Grid>
+  );
+
   return (
     <Stack spacing={2}>
       <Typography variant="h5" sx={{ display: "flex", alignItems: "center", gap: 1 }}>
@@ -1546,6 +2079,7 @@ export function AdminPage() {
           <Tab label="Recetas" value="recetas" icon={<RestaurantMenuIcon />} iconPosition="start" />
           <Tab label="Depósitos" value="depositos" icon={<StoreIcon />} iconPosition="start" />
           <Tab label="Usuarios" value="usuarios" icon={<AdminPanelSettingsIcon />} iconPosition="start" />
+          <Tab label="Clientes" value="clientes" icon={<PeopleIcon />} iconPosition="start" />
           <Tab label="Catálogos" value="catalogos" icon={<LibraryAddIcon />} iconPosition="start" />
         </Tabs>
         <Divider />
@@ -1554,11 +2088,12 @@ export function AdminPage() {
           {tab === "recetas" && renderRecetas()}
           {tab === "depositos" && renderDepositos()}
           {tab === "usuarios" && renderUsuarios()}
+          {tab === "clientes" && renderClientes()}
           {tab === "catalogos" && renderCatalogos()}
         </CardContent>
       </Card>
       <Box sx={{ color: "text.secondary", fontSize: 12 }}>
-        Pantalla única para altas, bajas y modificaciones de productos, recetas, depósitos, usuarios y catálogos base.
+        Pantalla única para altas, bajas y modificaciones de productos, recetas, depósitos, usuarios, clientes y catálogos base.
       </Box>
     </Stack>
   );
