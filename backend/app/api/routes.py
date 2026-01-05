@@ -31,6 +31,8 @@ from ..models import (
     StockMovement,
     StockMovementType,
     User,
+    Client,
+    ClientRepresentative,
 )
 from ..models.common import OrderStatus, RemitoStatus, SKUFamily, UnitOfMeasure
 from ..schemas import (
@@ -83,6 +85,12 @@ from ..schemas import (
     ProductionLineCreate,
     ProductionLineRead,
     ProductionLineUpdate,
+    ClientCreate,
+    ClientRead,
+    ClientUpdate,
+    ClientRepresentativeCreate,
+    ClientRepresentativeRead,
+    ClientRepresentativeUpdate,
 )
 
 public_router = APIRouter()
@@ -133,6 +141,20 @@ def _get_production_line_or_404(session: Session, production_line_id: int) -> Pr
     if not production_line.is_active:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La línea de producción está inactiva")
     return production_line
+
+
+def _get_client_or_404(session: Session, client_id: int) -> Client:
+    client = session.get(Client, client_id)
+    if not client:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cliente no encontrado")
+    return client
+
+
+def _get_client_representative_or_404(session: Session, client_id: int, representative_id: int) -> ClientRepresentative:
+    representative = session.get(ClientRepresentative, representative_id)
+    if not representative or representative.client_id != client_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Apoderado no encontrado")
+    return representative
 
 
 def _format_production_date(value: date) -> str:
@@ -1019,6 +1041,118 @@ def delete_deposit(deposit_id: int, session: Session = Depends(get_session)) -> 
     if not deposit:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Depósito no encontrado")
     session.delete(deposit)
+    session.commit()
+
+
+@router.get("/clients", tags=["clients"], response_model=list[ClientRead])
+def list_clients(
+    include_inactive: bool = Query(default=False),
+    session: Session = Depends(get_session),
+) -> list[Client]:
+    query = select(Client)
+    if not include_inactive:
+        query = query.where(Client.is_active == True)  # noqa: E712
+    return session.exec(query.order_by(Client.name)).all()
+
+
+@router.post("/clients", tags=["clients"], status_code=status.HTTP_201_CREATED, response_model=ClientRead)
+def create_client(payload: ClientCreate, session: Session = Depends(get_session)) -> Client:
+    existing = session.exec(select(Client).where(Client.name == payload.name)).first()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El cliente ya existe")
+    client = Client(**payload.model_dump())
+    session.add(client)
+    session.commit()
+    session.refresh(client)
+    return client
+
+
+@router.put("/clients/{client_id}", tags=["clients"], response_model=ClientRead)
+def update_client(client_id: int, payload: ClientUpdate, session: Session = Depends(get_session)) -> Client:
+    client = _get_client_or_404(session, client_id)
+    update_data = payload.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(client, field, value)
+    client.updated_at = datetime.utcnow()
+    session.add(client)
+    session.commit()
+    session.refresh(client)
+    return client
+
+
+@router.delete("/clients/{client_id}", tags=["clients"], status_code=status.HTTP_204_NO_CONTENT)
+def delete_client(client_id: int, session: Session = Depends(get_session)) -> None:
+    client = _get_client_or_404(session, client_id)
+    session.delete(client)
+    session.commit()
+
+
+@router.get("/clients/{client_id}/representatives", tags=["clients"], response_model=list[ClientRepresentativeRead])
+def list_client_representatives(
+    client_id: int,
+    include_inactive: bool = Query(default=False),
+    session: Session = Depends(get_session),
+) -> list[ClientRepresentative]:
+    _get_client_or_404(session, client_id)
+    query = select(ClientRepresentative).where(ClientRepresentative.client_id == client_id)
+    if not include_inactive:
+        query = query.where(ClientRepresentative.is_active == True)  # noqa: E712
+    return session.exec(query.order_by(ClientRepresentative.full_name)).all()
+
+
+@router.post(
+    "/clients/{client_id}/representatives",
+    tags=["clients"],
+    status_code=status.HTTP_201_CREATED,
+    response_model=ClientRepresentativeRead,
+)
+def create_client_representative(
+    client_id: int,
+    payload: ClientRepresentativeCreate,
+    session: Session = Depends(get_session),
+) -> ClientRepresentative:
+    _get_client_or_404(session, client_id)
+    representative = ClientRepresentative(client_id=client_id, **payload.model_dump())
+    session.add(representative)
+    session.commit()
+    session.refresh(representative)
+    return representative
+
+
+@router.put(
+    "/clients/{client_id}/representatives/{representative_id}",
+    tags=["clients"],
+    response_model=ClientRepresentativeRead,
+)
+def update_client_representative(
+    client_id: int,
+    representative_id: int,
+    payload: ClientRepresentativeUpdate,
+    session: Session = Depends(get_session),
+) -> ClientRepresentative:
+    representative = _get_client_representative_or_404(session, client_id, representative_id)
+    update_data = payload.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(representative, field, value)
+    representative.updated_at = datetime.utcnow()
+    session.add(representative)
+    session.commit()
+    session.refresh(representative)
+    return representative
+
+
+@router.delete(
+    "/clients/{client_id}/representatives/{representative_id}",
+    tags=["clients"],
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_client_representative(
+    client_id: int,
+    representative_id: int,
+    session: Session = Depends(get_session),
+) -> None:
+    representative = _get_client_representative_or_404(session, client_id, representative_id)
+    session.delete(representative)
     session.commit()
 
 

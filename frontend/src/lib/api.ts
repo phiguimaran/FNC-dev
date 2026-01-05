@@ -198,6 +198,27 @@ export type RemitoItem = {
   lot_code?: string | null;
 };
 
+export type Client = {
+  id: number;
+  name: string;
+  client_type: string;
+  is_active: boolean;
+};
+
+export type ClientRepresentative = {
+  id: number;
+  client_id: number;
+  full_name: string;
+  person_type: string;
+  document_type: string;
+  document_number: string;
+  email?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  notes?: string | null;
+  is_active: boolean;
+};
+
 export type Remito = {
   id: number;
   order_id: number;
@@ -469,6 +490,72 @@ export async function updateRecipe(id: number, payload: Omit<Recipe, "id">): Pro
 
 export async function deleteRecipe(id: number): Promise<void> {
   await apiRequest(`/recipes/${id}`, { method: "DELETE" }, "No se pudo eliminar la receta");
+}
+
+export async function fetchClients(params?: { include_inactive?: boolean }): Promise<Client[]> {
+  const query = new URLSearchParams();
+  if (params?.include_inactive) {
+    query.append("include_inactive", "true");
+  }
+  return apiRequest(`/clients${query.toString() ? `?${query.toString()}` : ""}`, {}, "No se pudo obtener los clientes");
+}
+
+export async function createClient(payload: Omit<Client, "id">): Promise<Client> {
+  return apiRequest("/clients", { method: "POST", body: JSON.stringify(payload) }, "No se pudo crear el cliente");
+}
+
+export async function updateClient(id: number, payload: Partial<Omit<Client, "id">>): Promise<Client> {
+  return apiRequest(`/clients/${id}`, { method: "PUT", body: JSON.stringify(payload) }, "No se pudo actualizar el cliente");
+}
+
+export async function deleteClient(id: number): Promise<void> {
+  await apiRequest(`/clients/${id}`, { method: "DELETE" }, "No se pudo eliminar el cliente");
+}
+
+export async function fetchClientRepresentatives(
+  clientId: number,
+  params?: { include_inactive?: boolean },
+): Promise<ClientRepresentative[]> {
+  const query = new URLSearchParams();
+  if (params?.include_inactive) {
+    query.append("include_inactive", "true");
+  }
+  return apiRequest(
+    `/clients/${clientId}/representatives${query.toString() ? `?${query.toString()}` : ""}`,
+    {},
+    "No se pudo obtener los apoderados",
+  );
+}
+
+export async function createClientRepresentative(
+  clientId: number,
+  payload: Omit<ClientRepresentative, "id" | "client_id">,
+): Promise<ClientRepresentative> {
+  return apiRequest(
+    `/clients/${clientId}/representatives`,
+    { method: "POST", body: JSON.stringify(payload) },
+    "No se pudo crear el apoderado",
+  );
+}
+
+export async function updateClientRepresentative(
+  clientId: number,
+  representativeId: number,
+  payload: Partial<Omit<ClientRepresentative, "id" | "client_id">>,
+): Promise<ClientRepresentative> {
+  return apiRequest(
+    `/clients/${clientId}/representatives/${representativeId}`,
+    { method: "PUT", body: JSON.stringify(payload) },
+    "No se pudo actualizar el apoderado",
+  );
+}
+
+export async function deleteClientRepresentative(clientId: number, representativeId: number): Promise<void> {
+  await apiRequest(
+    `/clients/${clientId}/representatives/${representativeId}`,
+    { method: "DELETE" },
+    "No se pudo eliminar el apoderado",
+  );
 }
 
 export async function fetchStockReport(): Promise<StockReport> {

@@ -3,6 +3,7 @@ from .inventory import Deposit, ProductionLot, StockLevel, StockMovement, StockM
 from .order import Order, OrderItem, Remito, RemitoItem
 from .sku import Recipe, RecipeItem, SKU, SKUType, SemiConversionRule
 from .merma import MermaCause, MermaEvent, MermaType, ProductionLine
+from .client import Client, ClientRepresentative
 from .user import Role, User
 
 __all__ = [
@@ -22,6 +23,8 @@ __all__ = [
     "MermaCause",
     "MermaEvent",
     "ProductionLine",
+    "Client",
+    "ClientRepresentative",
     "Order",
     "OrderItem",
     "Remito",

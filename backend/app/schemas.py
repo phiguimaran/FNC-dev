@@ -452,3 +452,56 @@ class MermaEventRead(SQLModel):
     affects_stock: bool
     action: MermaAction
     stock_movement_id: int | None = None
+
+
+class ClientBase(SQLModel):
+    name: str
+    client_type: str
+    is_active: bool = True
+
+
+class ClientCreate(ClientBase):
+    pass
+
+
+class ClientUpdate(SQLModel):
+    name: str | None = None
+    client_type: str | None = None
+    is_active: bool | None = None
+
+
+class ClientRead(ClientBase):
+    id: int
+
+
+class ClientRepresentativeBase(SQLModel):
+    full_name: str
+    person_type: str
+    document_type: str
+    document_number: str
+    email: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    notes: str | None = None
+    is_active: bool = True
+
+
+class ClientRepresentativeCreate(ClientRepresentativeBase):
+    pass
+
+
+class ClientRepresentativeUpdate(SQLModel):
+    full_name: str | None = None
+    person_type: str | None = None
+    document_type: str | None = None
+    document_number: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    address: str | None = None
+    notes: str | None = None
+    is_active: bool | None = None
+
+
+class ClientRepresentativeRead(ClientRepresentativeBase):
+    id: int
+    client_id: int
