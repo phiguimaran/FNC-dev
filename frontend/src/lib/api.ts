@@ -254,6 +254,12 @@ export type StockReport = {
   movement_totals: MovementSummary[];
 };
 
+export type SqlQueryResponse = {
+  columns: string[];
+  rows: (string | number | boolean | null)[][];
+  row_count: number;
+};
+
 export type ProductionLine = {
   id: number;
   name: string;
@@ -473,6 +479,14 @@ export async function deleteRecipe(id: number): Promise<void> {
 
 export async function fetchStockReport(): Promise<StockReport> {
   return apiRequest("/reports/stock-summary", {}, "No se pudo obtener el reporte de stock");
+}
+
+export async function runSqlQuery(query: string, maxRows?: number): Promise<SqlQueryResponse> {
+  return apiRequest(
+    "/admin/sql",
+    { method: "POST", body: JSON.stringify({ query, max_rows: maxRows }) },
+    "No se pudo ejecutar la consulta SQL",
+  );
 }
 
 export async function fetchOrders(): Promise<Order[]> {
