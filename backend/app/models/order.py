@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from typing import Optional, TYPE_CHECKING
 
+from sqlalchemy import Column, Enum
 from sqlmodel import Field, Relationship
 
 from .common import OrderStatus, RemitoStatus, TimestampedModel
@@ -16,7 +17,17 @@ class Order(TimestampedModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     destination: str = Field(max_length=255)
     destination_deposit_id: int | None = Field(default=None, foreign_key="deposits.id")
-    status: OrderStatus = Field(default=OrderStatus.DRAFT)
+    status: OrderStatus = Field(
+        default=OrderStatus.DRAFT,
+        sa_column=Column(
+            Enum(
+                OrderStatus,
+                name="orderstatus",
+                values_callable=lambda enum: [item.value for item in enum],
+            ),
+            nullable=False,
+        ),
+    )
     requested_for: date | None = None
     notes: str | None = Field(default=None, max_length=255)
 
@@ -43,7 +54,17 @@ class Remito(TimestampedModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     order_id: int = Field(foreign_key="orders.id")
-    status: RemitoStatus = Field(default=RemitoStatus.PENDING)
+    status: RemitoStatus = Field(
+        default=RemitoStatus.PENDING,
+        sa_column=Column(
+            Enum(
+                RemitoStatus,
+                name="remitostatus",
+                values_callable=lambda enum: [item.value for item in enum],
+            ),
+            nullable=False,
+        ),
+    )
     destination: str = Field(max_length=255)
     source_deposit_id: int | None = Field(default=None, foreign_key="deposits.id")
     destination_deposit_id: int | None = Field(default=None, foreign_key="deposits.id")
