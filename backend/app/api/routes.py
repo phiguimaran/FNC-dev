@@ -423,6 +423,20 @@ def _validate_order_items(session: Session, items: list[dict]) -> None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Algún SKU está inactivo")
 
 
+def _resolve_destination_name(
+    session: Session,
+    destination: str | None,
+    destination_deposit_id: int | None,
+) -> str:
+    if destination:
+        return destination
+    if destination_deposit_id:
+        deposit = session.get(Deposit, destination_deposit_id)
+        if deposit:
+            return deposit.name
+    return "Destino sin definir"
+
+
 def _map_order(order: Order, session: Session) -> OrderRead:
     session.refresh(order, attribute_names=["items"])
     items = []
@@ -441,9 +455,11 @@ def _map_order(order: Order, session: Session) -> OrderRead:
             }
         )
 
+    destination_name = _resolve_destination_name(session, order.destination, order.destination_deposit_id)
+
     return OrderRead(
         id=order.id,
-        destination=order.destination,
+        destination=destination_name,
         destination_deposit_id=order.destination_deposit_id,
         requested_for=order.requested_for,
         status=order.status,
@@ -490,11 +506,13 @@ def _map_remito(remito: Remito, session: Session) -> RemitoRead:
                 lot_code=item.lot_code,
             )
         )
+    destination_name = _resolve_destination_name(session, remito.destination, remito.destination_deposit_id)
+
     return RemitoRead(
         id=remito.id,
         order_id=remito.order_id,
         status=remito.status,
-        destination=remito.destination,
+        destination=destination_name,
         source_deposit_id=remito.source_deposit_id,
         destination_deposit_id=remito.destination_deposit_id,
         source_deposit_name=remito.source_deposit.name if remito.source_deposit else None,
