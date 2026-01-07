@@ -597,6 +597,21 @@ def _map_remito(remito: Remito, session: Session) -> RemitoRead:
     )
 
 
+def _delete_remito(session: Session, remito: Remito) -> None:
+    if remito.status in {RemitoStatus.DISPATCHED, RemitoStatus.RECEIVED, RemitoStatus.DELIVERED, RemitoStatus.SENT}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se puede eliminar un remito procesado")
+    remito_items = session.exec(select(RemitoItem).where(RemitoItem.remito_id == remito.id)).all()
+    for item in remito_items:
+        merma_items = session.exec(select(MermaEvent).where(MermaEvent.remito_item_id == item.id)).all()
+        for merma_event in merma_items:
+            session.delete(merma_event)
+        session.delete(item)
+    merma_events = session.exec(select(MermaEvent).where(MermaEvent.remito_id == remito.id)).all()
+    for merma_event in merma_events:
+        session.delete(merma_event)
+    session.delete(remito)
+
+
 @public_router.post("/auth/login", tags=["auth"], response_model=TokenResponse)
 def login(payload: LoginRequest, session: Session = Depends(get_session)) -> TokenResponse:
     user = session.exec(select(User).where(User.email == payload.username)).first()
@@ -1426,9 +1441,15 @@ def delete_order(order_id: int, session: Session = Depends(get_session)) -> None
     order = session.get(Order, order_id)
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pedido no encontrado")
+    remitos = session.exec(select(Remito).where(Remito.order_id == order.id)).all()
+    for remito in remitos:
+        _delete_remito(session, remito)
     items = session.exec(select(OrderItem).where(OrderItem.order_id == order.id)).all()
     for item in items:
         session.delete(item)
+    merma_events = session.exec(select(MermaEvent).where(MermaEvent.order_id == order.id)).all()
+    for merma_event in merma_events:
+        session.delete(merma_event)
     session.delete(order)
     session.commit()
 
@@ -1454,6 +1475,18 @@ def list_remitos(
         statement = statement.where(Remito.issue_date <= date_to)
     remitos = session.exec(statement.order_by(Remito.created_at.desc())).all()
     return [_map_remito(remito, session) for remito in remitos]
+
+
+@router.delete(
+    "/remitos/{remito_id}",
+    tags=["remitos"],
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_roles("ADMIN", "WAREHOUSE", "SALES"))],
+)
+def delete_remito(remito_id: int, session: Session = Depends(get_session)) -> None:
+    remito = _get_remito_or_404(session, remito_id)
+    _delete_remito(session, remito)
+    session.commit()
 
 
 @router.get(

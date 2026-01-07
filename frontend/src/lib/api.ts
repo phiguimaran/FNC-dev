@@ -566,6 +566,10 @@ export async function cancelRemito(remitoId: number): Promise<Remito> {
   return apiRequest(`/remitos/${remitoId}/cancel`, { method: "POST" }, "No se pudo cancelar el remito");
 }
 
+export async function deleteRemito(remitoId: number): Promise<void> {
+  await apiRequest(`/remitos/${remitoId}`, { method: "DELETE" }, "No se pudo eliminar el remito");
+}
+
 export async function fetchUsers(): Promise<User[]> {
   return apiRequest("/users", {}, "No se pudieron obtener los usuarios");
 }

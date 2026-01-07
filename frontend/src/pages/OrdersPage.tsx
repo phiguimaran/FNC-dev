@@ -3,6 +3,7 @@ import PlaylistAddIcon from "@mui/icons-material/PlaylistAdd";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutline";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import {
   Alert,
   Box,
@@ -40,6 +41,7 @@ import {
   dispatchRemito,
   receiveRemito,
   cancelRemito,
+  deleteRemito,
   updateOrder,
   updateOrderStatus,
 } from "../lib/api";
@@ -284,6 +286,23 @@ export function OrdersPage() {
     } catch (err) {
       console.error(err);
       setError("No pudimos cancelar el remito");
+    } finally {
+      setRemitoActionId(null);
+    }
+  };
+
+  const handleDeleteRemito = async (remitoId: number) => {
+    if (!window.confirm("¿Eliminar el remito?")) return;
+    setError(null);
+    setSuccess(null);
+    setRemitoActionId(remitoId);
+    try {
+      await deleteRemito(remitoId);
+      setSuccess("Remito eliminado");
+      await loadRemitosOnly();
+    } catch (err) {
+      console.error(err);
+      setError("No pudimos eliminar el remito");
     } finally {
       setRemitoActionId(null);
     }
@@ -588,7 +607,27 @@ export function OrdersPage() {
                             >
                               Cancelar
                             </Button>
+                            <Button
+                              color="error"
+                              variant="outlined"
+                              startIcon={<DeleteOutlineIcon />}
+                              onClick={() => handleDeleteRemito(remito.id)}
+                              disabled={remitoActionId === remito.id}
+                            >
+                              Eliminar
+                            </Button>
                           </>
+                        )}
+                        {remito.status === "cancelled" && (
+                          <Button
+                            color="error"
+                            variant="outlined"
+                            startIcon={<DeleteOutlineIcon />}
+                            onClick={() => handleDeleteRemito(remito.id)}
+                            disabled={remitoActionId === remito.id}
+                          >
+                            Eliminar
+                          </Button>
                         )}
                         {["dispatched", "sent"].includes(remito.status) && (
                           <Button
