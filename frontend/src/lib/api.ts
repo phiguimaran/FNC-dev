@@ -254,6 +254,27 @@ export type StockReport = {
   movement_totals: MovementSummary[];
 };
 
+export type SqlQueryResponse = {
+  columns: string[];
+  rows: (string | number | boolean | null)[][];
+  row_count: number;
+};
+
+export type ScriptInfo = {
+  name: string;
+  description?: string | null;
+};
+
+export type ScriptRunResponse = {
+  name: string;
+  command: string[];
+  exit_code: number;
+  duration_ms: number;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+};
+
 export type ProductionLine = {
   id: number;
   name: string;
@@ -473,6 +494,26 @@ export async function deleteRecipe(id: number): Promise<void> {
 
 export async function fetchStockReport(): Promise<StockReport> {
   return apiRequest("/reports/stock-summary", {}, "No se pudo obtener el reporte de stock");
+}
+
+export async function runSqlQuery(query: string, maxRows?: number): Promise<SqlQueryResponse> {
+  return apiRequest(
+    "/admin/sql",
+    { method: "POST", body: JSON.stringify({ query, max_rows: maxRows }) },
+    "No se pudo ejecutar la consulta SQL",
+  );
+}
+
+export async function fetchAdminScripts(): Promise<ScriptInfo[]> {
+  return apiRequest("/admin/scripts", {}, "No se pudieron obtener los scripts disponibles");
+}
+
+export async function runAdminScript(name: string, args: string[]): Promise<ScriptRunResponse> {
+  return apiRequest(
+    "/admin/scripts/run",
+    { method: "POST", body: JSON.stringify({ name, args }) },
+    "No se pudo ejecutar el script",
+  );
 }
 
 export async function fetchOrders(): Promise<Order[]> {

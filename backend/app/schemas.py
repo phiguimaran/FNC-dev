@@ -222,6 +222,37 @@ class StockReportRead(SQLModel):
     movement_totals: list[MovementSummary]
 
 
+class SQLQueryRequest(SQLModel):
+    query: str
+    max_rows: int | None = None
+
+
+class SQLQueryResponse(SQLModel):
+    columns: list[str]
+    rows: list[list[str | int | float | bool | None]]
+    row_count: int
+
+
+class ScriptInfo(SQLModel):
+    name: str
+    description: str | None = None
+
+
+class ScriptRunRequest(SQLModel):
+    name: str
+    args: list[str] = []
+
+
+class ScriptRunResponse(SQLModel):
+    name: str
+    command: list[str]
+    exit_code: int
+    duration_ms: int
+    stdout: str
+    stderr: str
+    truncated: bool
+
+
 class UserCreate(SQLModel):
     email: str
     full_name: str

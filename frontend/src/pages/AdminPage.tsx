@@ -3,8 +3,10 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
 import InventoryIcon from "@mui/icons-material/Inventory2";
 import LibraryAddIcon from "@mui/icons-material/LibraryAdd";
+import PlayCircleOutlineIcon from "@mui/icons-material/PlayCircleOutline";
 import RestaurantMenuIcon from "@mui/icons-material/RestaurantMenu";
 import StoreIcon from "@mui/icons-material/Store";
+import TerminalIcon from "@mui/icons-material/Terminal";
 import {
   Alert,
   Box,
@@ -81,6 +83,12 @@ import {
   updateUser,
   Role,
   User,
+  fetchAdminScripts,
+  runAdminScript,
+  ScriptInfo,
+  ScriptRunResponse,
+  runSqlQuery,
+  SqlQueryResponse,
 } from "../lib/api";
 
 const PRODUCTION_TYPE_CODES = ["PT", "SEMI"];
@@ -95,7 +103,7 @@ const mermaStageLabel = (stage: MermaStage) => MERMA_STAGE_OPTIONS.find((s) => s
 
 type RecipeFormItem = { component_id: string; quantity: string };
 
-type TabKey = "productos" | "recetas" | "depositos" | "usuarios" | "catalogos";
+type TabKey = "productos" | "recetas" | "depositos" | "usuarios" | "catalogos" | "sql" | "scripts";
 
 export function AdminPage() {
   const [tab, setTab] = useState<TabKey>("productos");
@@ -116,6 +124,16 @@ export function AdminPage() {
   const [depositSearch, setDepositSearch] = useState("");
   const [userSearch, setUserSearch] = useState("");
   const [showInactiveSkus, setShowInactiveSkus] = useState(false);
+  const [sqlQuery, setSqlQuery] = useState("");
+  const [sqlResult, setSqlResult] = useState<SqlQueryResponse | null>(null);
+  const [sqlError, setSqlError] = useState<string | null>(null);
+  const [sqlLoading, setSqlLoading] = useState(false);
+  const [scripts, setScripts] = useState<ScriptInfo[]>([]);
+  const [selectedScript, setSelectedScript] = useState("");
+  const [scriptArgs, setScriptArgs] = useState("");
+  const [scriptResult, setScriptResult] = useState<ScriptRunResponse | null>(null);
+  const [scriptError, setScriptError] = useState<string | null>(null);
+  const [scriptLoading, setScriptLoading] = useState(false);
 
   const [skuForm, setSkuForm] = useState<{ id?: number; code: string; name: string; sku_type_id: number | ""; unit: UnitOfMeasure; units_per_kg?: number | ""; notes: string; family: SKUFamily | ""; is_active: boolean }>(
     {
@@ -258,6 +276,17 @@ export function AdminPage() {
       setMovementTypes(movementTypeList);
       setMermaTypes(mermaTypeList);
       setMermaCauses(mermaCauseList);
+
+      try {
+        const scriptsList = await fetchAdminScripts();
+        setScripts(scriptsList);
+        if (!selectedScript && scriptsList.length > 0) {
+          setSelectedScript(scriptsList[0].name);
+        }
+      } catch (err) {
+        console.error(err);
+        setScripts([]);
+      }
 
       const defaultSkuType = skuTypeList.find((t) => t.code === "MP" && t.is_active) ?? skuTypeList.find((t) => t.is_active);
       if (defaultSkuType && !skuForm.sku_type_id) {
@@ -1182,6 +1211,185 @@ export function AdminPage() {
     </Grid>
   );
 
+  const handleRunSql = async () => {
+    if (!sqlQuery.trim()) {
+      setSqlError("Ingresa una consulta SQL antes de ejecutar.");
+      setSqlResult(null);
+      return;
+    }
+    setSqlLoading(true);
+    setSqlError(null);
+    setSqlResult(null);
+    try {
+      const result = await runSqlQuery(sqlQuery);
+      setSqlResult(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No se pudo ejecutar la consulta";
+      setSqlError(message);
+    } finally {
+      setSqlLoading(false);
+    }
+  };
+
+  const handleRunScript = async () => {
+    if (!selectedScript) {
+      setScriptError("Selecciona un script para ejecutar.");
+      setScriptResult(null);
+      return;
+    }
+    setScriptLoading(true);
+    setScriptError(null);
+    setScriptResult(null);
+    const args = scriptArgs.trim() ? scriptArgs.trim().split(/\s+/) : [];
+    try {
+      const result = await runAdminScript(selectedScript, args);
+      setScriptResult(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No se pudo ejecutar el script";
+      setScriptError(message);
+    } finally {
+      setScriptLoading(false);
+    }
+  };
+
+  const renderSql = () => (
+    <Stack spacing={2}>
+      <Typography variant="subtitle1" fontWeight={600}>
+        Consultas SQL (solo lectura)
+      </Typography>
+      <TextField
+        label="Consulta"
+        value={sqlQuery}
+        onChange={(event) => setSqlQuery(event.target.value)}
+        placeholder="SELECT * FROM skus LIMIT 20"
+        minRows={6}
+        multiline
+        fullWidth
+        helperText="Se aceptan consultas SELECT o CTE. El backend aplica un límite por defecto."
+      />
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+        <Button variant="contained" onClick={handleRunSql} disabled={sqlLoading}>
+          {sqlLoading ? "Ejecutando..." : "Ejecutar SQL"}
+        </Button>
+        <Button
+          variant="outlined"
+          onClick={() => {
+            setSqlQuery("");
+            setSqlResult(null);
+            setSqlError(null);
+          }}
+        >
+          Limpiar
+        </Button>
+      </Stack>
+      {sqlError && <Alert severity="warning">{sqlError}</Alert>}
+      {sqlResult && (
+        <Card variant="outlined">
+          <CardHeader title={`Resultado (${sqlResult.row_count} filas)`} />
+          <Divider />
+          <CardContent>
+            {sqlResult.row_count === 0 ? (
+              <Typography color="text.secondary">La consulta no devolvió resultados.</Typography>
+            ) : (
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    {sqlResult.columns.map((column) => (
+                      <TableCell key={column}>{column}</TableCell>
+                    ))}
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {sqlResult.rows.map((row, rowIndex) => (
+                    <TableRow key={rowIndex}>
+                      {row.map((cell, cellIndex) => (
+                        <TableCell key={`${rowIndex}-${cellIndex}`}>{cell ?? "—"}</TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </Stack>
+  );
+
+  const renderScripts = () => (
+    <Stack spacing={2}>
+      <Typography variant="subtitle1" fontWeight={600}>
+        Scripts del servidor
+      </Typography>
+      {scripts.length === 0 ? (
+        <Alert severity="info">No hay scripts disponibles en el servidor.</Alert>
+      ) : (
+        <>
+          <TextField
+            select
+            label="Script"
+            value={selectedScript}
+            onChange={(event) => setSelectedScript(event.target.value)}
+            helperText="Solo scripts configurados en el servidor."
+          >
+            {scripts.map((script) => (
+              <MenuItem key={script.name} value={script.name}>
+                {script.name}
+              </MenuItem>
+            ))}
+          </TextField>
+          {scripts.find((script) => script.name === selectedScript)?.description && (
+            <Alert severity="info">{scripts.find((script) => script.name === selectedScript)?.description}</Alert>
+          )}
+          <TextField
+            label="Argumentos"
+            value={scriptArgs}
+            onChange={(event) => setScriptArgs(event.target.value)}
+            placeholder="--help"
+            helperText="Separados por espacios."
+          />
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+            <Button variant="contained" onClick={handleRunScript} disabled={scriptLoading}>
+              {scriptLoading ? "Ejecutando..." : "Ejecutar script"}
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                setScriptArgs("");
+                setScriptResult(null);
+                setScriptError(null);
+              }}
+            >
+              Limpiar
+            </Button>
+          </Stack>
+        </>
+      )}
+      {scriptError && <Alert severity="warning">{scriptError}</Alert>}
+      {scriptResult && (
+        <Card variant="outlined">
+          <CardHeader
+            title={scriptResult.name}
+            subheader={`Salida: ${scriptResult.exit_code} · ${scriptResult.duration_ms} ms${scriptResult.truncated ? " · truncado" : ""}`}
+          />
+          <Divider />
+          <CardContent>
+            <Stack spacing={2}>
+              <Box sx={{ fontFamily: "monospace", whiteSpace: "pre-wrap" }} component="pre">
+                {scriptResult.stdout || "Sin salida estándar."}
+              </Box>
+              {scriptResult.stderr && (
+                <Box sx={{ fontFamily: "monospace", whiteSpace: "pre-wrap", color: "error.main" }} component="pre">
+                  {scriptResult.stderr}
+                </Box>
+              )}
+            </Stack>
+          </CardContent>
+        </Card>
+      )}
+    </Stack>
+  );
+
   const renderDepositos = () => (
     <Grid container spacing={2} alignItems="stretch">
       <Grid item xs={12} md={4}>
@@ -1547,6 +1755,8 @@ export function AdminPage() {
           <Tab label="Depósitos" value="depositos" icon={<StoreIcon />} iconPosition="start" />
           <Tab label="Usuarios" value="usuarios" icon={<AdminPanelSettingsIcon />} iconPosition="start" />
           <Tab label="Catálogos" value="catalogos" icon={<LibraryAddIcon />} iconPosition="start" />
+          <Tab label="SQL" value="sql" icon={<TerminalIcon />} iconPosition="start" />
+          <Tab label="Scripts" value="scripts" icon={<PlayCircleOutlineIcon />} iconPosition="start" />
         </Tabs>
         <Divider />
         <CardContent>
@@ -1555,6 +1765,8 @@ export function AdminPage() {
           {tab === "depositos" && renderDepositos()}
           {tab === "usuarios" && renderUsuarios()}
           {tab === "catalogos" && renderCatalogos()}
+          {tab === "sql" && renderSql()}
+          {tab === "scripts" && renderScripts()}
         </CardContent>
       </Card>
       <Box sx={{ color: "text.secondary", fontSize: 12 }}>
