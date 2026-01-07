@@ -1,8 +1,9 @@
 import re
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlmodel import Session, select
 
 from ..core.config import get_settings
@@ -58,6 +59,8 @@ from ..schemas import (
     MovementSummary,
     UnitRead,
     ProductionLotRead,
+    SQLQueryRequest,
+    SQLQueryResponse,
     LoginRequest,
     TokenResponse,
     UserCreate,
@@ -207,6 +210,18 @@ def _generate_lot_code(session: Session, sku: SKU, production_line: ProductionLi
     ).all()
     max_seq = max((_extract_sequence(code) for code in existing_codes), default=0)
     return f"{prefix}-{max_seq + 1:0{LOT_CODE_SEQUENCE_LENGTH}d}"
+
+
+def _serialize_sql_value(value: object) -> str | int | float | bool | None:
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
 
 
 def _upsert_semi_conversion_rule(session: Session, sku_id: int, units_per_kg: float) -> None:
@@ -2230,6 +2245,41 @@ def get_merma_event(merma_id: int, session: Session = Depends(get_session)) -> M
     if not event:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Merma no encontrada")
     return _map_merma_event(event, session)
+
+
+@router.post(
+    "/admin/sql",
+    tags=["admin"],
+    response_model=SQLQueryResponse,
+    dependencies=[Depends(require_roles("ADMIN"))],
+)
+def run_sql_query(payload: SQLQueryRequest, session: Session = Depends(get_session)) -> SQLQueryResponse:
+    raw_query = payload.query.strip()
+    if not raw_query:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La consulta SQL está vacía")
+
+    normalized = raw_query.rstrip(";").strip()
+    if ";" in normalized:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Solo se admite una sentencia SQL")
+
+    lower_query = normalized.lower()
+    if not (lower_query.startswith("select") or lower_query.startswith("with")):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Solo se permiten consultas SELECT o CTE")
+
+    if re.search(r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke)\b", lower_query):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La consulta contiene operaciones no permitidas")
+
+    max_rows = max(1, min(payload.max_rows or 200, 1000))
+    query = normalized if re.search(r"\blimit\b", lower_query) else f"{normalized} LIMIT {max_rows}"
+
+    try:
+        result = session.exec(text(query))
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Error al ejecutar SQL: {exc}") from exc
+
+    columns = list(result.keys())
+    rows = [[_serialize_sql_value(value) for value in row] for row in result.all()]
+    return SQLQueryResponse(columns=columns, rows=rows, row_count=len(rows))
 
 
 @router.get("/reports/stock-summary", tags=["reports"], response_model=StockReportRead)

@@ -5,6 +5,7 @@ import InventoryIcon from "@mui/icons-material/Inventory2";
 import LibraryAddIcon from "@mui/icons-material/LibraryAdd";
 import RestaurantMenuIcon from "@mui/icons-material/RestaurantMenu";
 import StoreIcon from "@mui/icons-material/Store";
+import TerminalIcon from "@mui/icons-material/Terminal";
 import {
   Alert,
   Box,
@@ -81,6 +82,8 @@ import {
   updateUser,
   Role,
   User,
+  runSqlQuery,
+  SqlQueryResponse,
 } from "../lib/api";
 
 const PRODUCTION_TYPE_CODES = ["PT", "SEMI"];
@@ -95,7 +98,7 @@ const mermaStageLabel = (stage: MermaStage) => MERMA_STAGE_OPTIONS.find((s) => s
 
 type RecipeFormItem = { component_id: string; quantity: string };
 
-type TabKey = "productos" | "recetas" | "depositos" | "usuarios" | "catalogos";
+type TabKey = "productos" | "recetas" | "depositos" | "usuarios" | "catalogos" | "sql";
 
 export function AdminPage() {
   const [tab, setTab] = useState<TabKey>("productos");
@@ -116,6 +119,10 @@ export function AdminPage() {
   const [depositSearch, setDepositSearch] = useState("");
   const [userSearch, setUserSearch] = useState("");
   const [showInactiveSkus, setShowInactiveSkus] = useState(false);
+  const [sqlQuery, setSqlQuery] = useState("");
+  const [sqlResult, setSqlResult] = useState<SqlQueryResponse | null>(null);
+  const [sqlError, setSqlError] = useState<string | null>(null);
+  const [sqlLoading, setSqlLoading] = useState(false);
 
   const [skuForm, setSkuForm] = useState<{ id?: number; code: string; name: string; sku_type_id: number | ""; unit: UnitOfMeasure; units_per_kg?: number | ""; notes: string; family: SKUFamily | ""; is_active: boolean }>(
     {
@@ -1182,6 +1189,90 @@ export function AdminPage() {
     </Grid>
   );
 
+  const handleRunSql = async () => {
+    if (!sqlQuery.trim()) {
+      setSqlError("Ingresa una consulta SQL antes de ejecutar.");
+      setSqlResult(null);
+      return;
+    }
+    setSqlLoading(true);
+    setSqlError(null);
+    setSqlResult(null);
+    try {
+      const result = await runSqlQuery(sqlQuery);
+      setSqlResult(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "No se pudo ejecutar la consulta";
+      setSqlError(message);
+    } finally {
+      setSqlLoading(false);
+    }
+  };
+
+  const renderSql = () => (
+    <Stack spacing={2}>
+      <Typography variant="subtitle1" fontWeight={600}>
+        Consultas SQL (solo lectura)
+      </Typography>
+      <TextField
+        label="Consulta"
+        value={sqlQuery}
+        onChange={(event) => setSqlQuery(event.target.value)}
+        placeholder="SELECT * FROM skus LIMIT 20"
+        minRows={6}
+        multiline
+        fullWidth
+        helperText="Se aceptan consultas SELECT o CTE. El backend aplica un límite por defecto."
+      />
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+        <Button variant="contained" onClick={handleRunSql} disabled={sqlLoading}>
+          {sqlLoading ? "Ejecutando..." : "Ejecutar SQL"}
+        </Button>
+        <Button
+          variant="outlined"
+          onClick={() => {
+            setSqlQuery("");
+            setSqlResult(null);
+            setSqlError(null);
+          }}
+        >
+          Limpiar
+        </Button>
+      </Stack>
+      {sqlError && <Alert severity="warning">{sqlError}</Alert>}
+      {sqlResult && (
+        <Card variant="outlined">
+          <CardHeader title={`Resultado (${sqlResult.row_count} filas)`} />
+          <Divider />
+          <CardContent>
+            {sqlResult.row_count === 0 ? (
+              <Typography color="text.secondary">La consulta no devolvió resultados.</Typography>
+            ) : (
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    {sqlResult.columns.map((column) => (
+                      <TableCell key={column}>{column}</TableCell>
+                    ))}
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {sqlResult.rows.map((row, rowIndex) => (
+                    <TableRow key={rowIndex}>
+                      {row.map((cell, cellIndex) => (
+                        <TableCell key={`${rowIndex}-${cellIndex}`}>{cell ?? "—"}</TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </Stack>
+  );
+
   const renderDepositos = () => (
     <Grid container spacing={2} alignItems="stretch">
       <Grid item xs={12} md={4}>
@@ -1547,6 +1638,7 @@ export function AdminPage() {
           <Tab label="Depósitos" value="depositos" icon={<StoreIcon />} iconPosition="start" />
           <Tab label="Usuarios" value="usuarios" icon={<AdminPanelSettingsIcon />} iconPosition="start" />
           <Tab label="Catálogos" value="catalogos" icon={<LibraryAddIcon />} iconPosition="start" />
+          <Tab label="SQL" value="sql" icon={<TerminalIcon />} iconPosition="start" />
         </Tabs>
         <Divider />
         <CardContent>
@@ -1555,6 +1647,7 @@ export function AdminPage() {
           {tab === "depositos" && renderDepositos()}
           {tab === "usuarios" && renderUsuarios()}
           {tab === "catalogos" && renderCatalogos()}
+          {tab === "sql" && renderSql()}
         </CardContent>
       </Card>
       <Box sx={{ color: "text.secondary", fontSize: 12 }}>
