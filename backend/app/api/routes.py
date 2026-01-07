@@ -1,6 +1,11 @@
+import os
 import re
+import sys
+import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
+import subprocess
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, text
@@ -61,6 +66,9 @@ from ..schemas import (
     ProductionLotRead,
     SQLQueryRequest,
     SQLQueryResponse,
+    ScriptInfo,
+    ScriptRunRequest,
+    ScriptRunResponse,
     LoginRequest,
     TokenResponse,
     UserCreate,
@@ -222,6 +230,54 @@ def _serialize_sql_value(value: object) -> str | int | float | bool | None:
     if isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
+
+
+def _get_scripts_dir() -> Path:
+    base_dir = Path(__file__).resolve().parents[2]
+    scripts_dir = Path(settings.admin_scripts_dir)
+    return scripts_dir if scripts_dir.is_absolute() else base_dir / scripts_dir
+
+
+def _read_script_description(path: Path) -> str | None:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for _ in range(5):
+                line = handle.readline()
+                if not line:
+                    break
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    return stripped.lstrip("#").strip() or None
+    except OSError:
+        return None
+    return None
+
+
+def _list_available_scripts() -> list[ScriptInfo]:
+    scripts_dir = _get_scripts_dir()
+    if not scripts_dir.exists() or not scripts_dir.is_dir():
+        return []
+    scripts = []
+    for path in sorted(scripts_dir.iterdir()):
+        if path.is_file() and not path.name.startswith("."):
+            scripts.append(ScriptInfo(name=path.name, description=_read_script_description(path)))
+    return scripts
+
+
+def _truncate_output(value: str, max_bytes: int) -> tuple[str, bool]:
+    data = value.encode("utf-8", errors="replace")
+    if len(data) <= max_bytes:
+        return value, False
+    trimmed = data[:max_bytes].decode("utf-8", errors="replace")
+    return trimmed, True
+
+
+def _build_script_command(path: Path, args: list[str]) -> list[str]:
+    if path.suffix == ".py":
+        return [sys.executable, str(path), *args]
+    if path.suffix == ".sh":
+        return ["bash", str(path), *args]
+    return [str(path), *args]
 
 
 def _upsert_semi_conversion_rule(session: Session, sku_id: int, units_per_kg: float) -> None:
@@ -2280,6 +2336,62 @@ def run_sql_query(payload: SQLQueryRequest, session: Session = Depends(get_sessi
     columns = list(result.keys())
     rows = [[_serialize_sql_value(value) for value in row] for row in result.all()]
     return SQLQueryResponse(columns=columns, rows=rows, row_count=len(rows))
+
+
+@router.get(
+    "/admin/scripts",
+    tags=["admin"],
+    response_model=list[ScriptInfo],
+    dependencies=[Depends(require_roles("ADMIN"))],
+)
+def list_admin_scripts() -> list[ScriptInfo]:
+    return _list_available_scripts()
+
+
+@router.post(
+    "/admin/scripts/run",
+    tags=["admin"],
+    response_model=ScriptRunResponse,
+    dependencies=[Depends(require_roles("ADMIN"))],
+)
+def run_admin_script(payload: ScriptRunRequest) -> ScriptRunResponse:
+    scripts_dir = _get_scripts_dir().resolve()
+    script_path = (scripts_dir / payload.name).resolve()
+    if scripts_dir not in script_path.parents:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Script inválido")
+    if not script_path.exists() or not script_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Script no encontrado")
+    if script_path.suffix not in {".py", ".sh"} and not os.access(script_path, os.X_OK):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El script no es ejecutable")
+
+    command = _build_script_command(script_path, payload.args)
+    start_time = time.monotonic()
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(scripts_dir),
+            capture_output=True,
+            text=True,
+            timeout=settings.admin_scripts_timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=status.HTTP_408_REQUEST_TIMEOUT, detail="El script excedió el tiempo máximo") from exc
+    duration_ms = int((time.monotonic() - start_time) * 1000)
+
+    max_bytes = max(1, settings.admin_scripts_max_output_kb) * 1024
+    stdout, stdout_truncated = _truncate_output(completed.stdout or "", max_bytes)
+    stderr, stderr_truncated = _truncate_output(completed.stderr or "", max_bytes)
+
+    return ScriptRunResponse(
+        name=payload.name,
+        command=command,
+        exit_code=completed.returncode,
+        duration_ms=duration_ms,
+        stdout=stdout,
+        stderr=stderr,
+        truncated=stdout_truncated or stderr_truncated,
+    )
 
 
 @router.get("/reports/stock-summary", tags=["reports"], response_model=StockReportRead)

@@ -233,6 +233,26 @@ class SQLQueryResponse(SQLModel):
     row_count: int
 
 
+class ScriptInfo(SQLModel):
+    name: str
+    description: str | None = None
+
+
+class ScriptRunRequest(SQLModel):
+    name: str
+    args: list[str] = []
+
+
+class ScriptRunResponse(SQLModel):
+    name: str
+    command: list[str]
+    exit_code: int
+    duration_ms: int
+    stdout: str
+    stderr: str
+    truncated: bool
+
+
 class UserCreate(SQLModel):
     email: str
     full_name: str

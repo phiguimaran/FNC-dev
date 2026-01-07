@@ -260,6 +260,21 @@ export type SqlQueryResponse = {
   row_count: number;
 };
 
+export type ScriptInfo = {
+  name: string;
+  description?: string | null;
+};
+
+export type ScriptRunResponse = {
+  name: string;
+  command: string[];
+  exit_code: number;
+  duration_ms: number;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+};
+
 export type ProductionLine = {
   id: number;
   name: string;
@@ -486,6 +501,18 @@ export async function runSqlQuery(query: string, maxRows?: number): Promise<SqlQ
     "/admin/sql",
     { method: "POST", body: JSON.stringify({ query, max_rows: maxRows }) },
     "No se pudo ejecutar la consulta SQL",
+  );
+}
+
+export async function fetchAdminScripts(): Promise<ScriptInfo[]> {
+  return apiRequest("/admin/scripts", {}, "No se pudieron obtener los scripts disponibles");
+}
+
+export async function runAdminScript(name: string, args: string[]): Promise<ScriptRunResponse> {
+  return apiRequest(
+    "/admin/scripts/run",
+    { method: "POST", body: JSON.stringify({ name, args }) },
+    "No se pudo ejecutar el script",
   );
 }
 
