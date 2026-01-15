@@ -1,7 +1,7 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-cd /home/adminuser/proyectos/fnc-dev
+cd /home/adminuser/proyectos/FNC-dev
 
 echo ">> Bajando cambios de origin/main y descartando cambios locales en archivos versionados..."
 git fetch origin
